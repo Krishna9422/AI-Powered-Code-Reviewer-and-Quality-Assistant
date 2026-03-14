@@ -1,0 +1,40 @@
+{
+    "total_functions": 4,
+    "documented": 4,
+    "undocumented": 0,
+    "coverage_percent": 100.0,
+    "functions": [
+        {
+            "name": "calculate_average",
+            "type": "Function",
+            "start_line": 5,
+            "end_line": 19,
+            "has_docstring": true,
+            "complexity": 3
+        },
+        {
+            "name": "add",
+            "type": "Function",
+            "start_line": 22,
+            "end_line": 32,
+            "has_docstring": true,
+            "complexity": 1
+        },
+        {
+            "name": "find_max",
+            "type": "Function",
+            "start_line": 35,
+            "end_line": 50,
+            "has_docstring": true,
+            "complexity": 4
+        },
+        {
+            "name": "is_even",
+            "type": "Function",
+            "start_line": 53,
+            "end_line": 63,
+            "has_docstring": true,
+            "complexity": 1
+        }
+    ]
+}
