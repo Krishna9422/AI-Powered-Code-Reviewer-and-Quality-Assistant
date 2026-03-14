@@ -1,0 +1,1941 @@
+"""Main_app.py module."""
+
+import streamlit as st
+import json
+import os
+import re
+import importlib
+import pandas as pd
+import plotly.express as px
+import numpy as np
+
+# Import enhanced UI modules
+from ui import enhanced_ui, dashboard
+
+from core import doc_steward
+importlib.reload(doc_steward)
+
+from core.doc_steward import (
+    get_entity_list,
+    get_maintainability_index,
+    get_function_complexity,
+    generate_coverage_report,
+    apply_missing_docstrings,
+    apply_docstring_fix_at_line,
+    apply_docstring_fixes_from_pydocstyle,
+)
+
+st.set_page_config(
+    page_title="AI Code Reviewer - Advanced Analytics",
+    page_icon="🧠",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+
+def apply_global_ui_style():
+    """Apply consistent UI styling across all pages."""
+    st.markdown(
+        """
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+            
+            /* Apply custom font */
+            html, body, [class*="css"] {
+                font-family: 'Outfit', sans-serif !important;
+            }
+            
+            /* Overall Background */
+            .stApp {
+                background: #0f172a !important;
+                background-image: 
+                    radial-gradient(at 0% 0%, hsla(253,16%,7%,1) 0, transparent 50%), 
+                    radial-gradient(at 50% 0%, hsla(225,39%,30%,0.1) 0, transparent 50%), 
+                    radial-gradient(at 100% 0%, hsla(339,49%,30%,0.1) 0, transparent 50%);
+            }
+            
+            /* Adjust main container spacing */
+            .main .block-container {
+                padding-top: 2rem;
+                padding-bottom: 3rem;
+                max-width: 1300px;
+            }
+            
+            /* Sidebar Styling */
+            [data-testid="stSidebar"] {
+                background-color: rgba(15, 23, 42, 0.8) !important;
+                backdrop-filter: blur(12px);
+                border-right: 1px solid rgba(255, 255, 255, 0.05);
+            }
+            [data-testid="stSidebar"] * {
+                color: #e2e8f0;
+            }
+            
+            /* Title and Headings */
+            h1, h2, h3 {
+                color: #f8fafc !important;
+                font-weight: 700 !important;
+                letter-spacing: -0.02em;
+            }
+            
+            /* Gradient for main markdown headers that act as titles */
+            .stMarkdown h3 {
+                background: linear-gradient(135deg, #818cf8 0%, #c084fc 100%);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                display: inline-block;
+                margin-top: -0.5rem;
+            }
+            
+            /* Premium Button Styles */
+            .stButton > button {
+                border-radius: 10px;
+                font-weight: 600;
+                background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+                color: white !important;
+                border: none;
+                padding: 0.6rem 1.2rem;
+                transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                box-shadow: 0 4px 15px rgba(99, 102, 241, 0.25);
+                font-family: 'Outfit', sans-serif;
+            }
+            .stButton > button:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 8px 25px rgba(99, 102, 241, 0.4);
+                background: linear-gradient(135deg, #4f46e5 0%, #9333ea 100%);
+            }
+            .stButton > button:active {
+                transform: translateY(0);
+            }
+            
+            /* Download Button Variation */
+            [data-testid="stDownloadButton"] > button {
+                background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+                box-shadow: 0 4px 15px rgba(16, 185, 129, 0.25);
+            }
+            [data-testid="stDownloadButton"] > button:hover {
+                box-shadow: 0 8px 25px rgba(16, 185, 129, 0.4);
+                background: linear-gradient(135deg, #059669 0%, #047857 100%);
+            }
+            
+            /* Metric Cards (Glassmorphism) */
+            div[data-testid="stMetric"] {
+                background: rgba(30, 41, 59, 0.4);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 16px;
+                padding: 1.2rem;
+                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+                backdrop-filter: blur(12px);
+                -webkit-backdrop-filter: blur(12px);
+                transition: transform 0.3s ease, border-color 0.3s ease;
+            }
+            div[data-testid="stMetric"]:hover {
+                transform: translateY(-4px);
+                border-color: rgba(129, 140, 248, 0.5);
+            }
+            
+            div[data-testid="stMetricLabel"] * {
+                color: #94a3b8 !important;
+                font-weight: 500;
+                font-size: 0.95rem;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+            }
+            
+            div[data-testid="stMetricValue"] * {
+                color: #f8fafc !important;
+                font-weight: 700;
+                font-size: 2.2rem;
+                background: linear-gradient(to right, #ffffff, #cbd5e1);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+            }
+            
+            /* Alerts and Info Boxes */
+            [data-testid="stAlert"] {
+                border-radius: 14px !important;
+                border: 1px solid rgba(255, 255, 255, 0.05) !important;
+                padding: 1.2rem !important;
+                background: rgba(30, 41, 59, 0.5) !important;
+                backdrop-filter: blur(10px);
+                color: #f8fafc !important;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1) !important;
+            }
+            
+            /* Custom Section Titles */
+            .ui-section-title {
+                font-family: 'Outfit', sans-serif !important;
+                font-weight: 600;
+                font-size: 1.3rem;
+                margin: 2rem 0 1rem;
+                padding-bottom: 0.5rem;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+                color: #f8fafc;
+                display: flex;
+                align-items: center;
+                gap: 0.6rem;
+            }
+            
+            /* Dataframes / Tables Styling */
+            [data-testid="stDataFrame"] {
+                border-radius: 14px;
+                overflow: hidden;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+            }
+            
+            /* Selectboxes and Inputs */
+            .stSelectbox > div > div {
+                background-color: rgba(30, 41, 59, 0.6);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 10px;
+                color: #f8fafc;
+                transition: border-color 0.2s;
+            }
+            .stSelectbox > div > div:hover, .stSelectbox > div > div:focus-within {
+                border-color: rgba(129, 140, 248, 0.6);
+            }
+            
+            .stTextInput > div > div > input {
+                background-color: rgba(30, 41, 59, 0.6);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 10px;
+                color: #f8fafc;
+                transition: border-color 0.2s;
+            }
+            .stTextInput > div > div > input:focus {
+                border-color: rgba(129, 140, 248, 0.6);
+                box-shadow: 0 0 0 1px rgba(129, 140, 248, 0.6);
+            }
+            
+            /* Radio buttons / Checkboxes inside Sidebar & Modals */
+            .stRadio > div {
+                background-color: rgba(30, 41, 59, 0.4);
+                border-radius: 12px;
+                padding: 0.8rem;
+                border: 1px solid rgba(255, 255, 255, 0.06);
+            }
+            
+            /* Expander Styling */
+            [data-testid="stExpander"] {
+                background-color: rgba(30, 41, 59, 0.3);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 12px;
+                overflow: hidden;
+            }
+            
+            /* Streamlit Tabs */
+            [data-testid="stTabs"] [data-baseweb="tab-list"] {
+                background-color: rgba(30, 41, 59, 0.3);
+                border-radius: 12px;
+                padding: 0.3rem;
+                gap: 0.3rem;
+            }
+            [data-testid="stTabs"] [data-baseweb="tab"] {
+                border-radius: 8px;
+                padding: 0.5rem 1rem;
+                color: #94a3b8;
+            }
+            [data-testid="stTabs"] [aria-selected="true"] {
+                background-color: rgba(255, 255, 255, 0.1);
+                color: #f8fafc !important;
+            }
+            
+            /* Custom Scrollbar */
+            ::-webkit-scrollbar {
+                width: 8px;
+                height: 8px;
+            }
+            ::-webkit-scrollbar-track {
+                background: #0f172a;
+            }
+            ::-webkit-scrollbar-thumb {
+                background: #334155;
+                border-radius: 4px;
+            }
+            ::-webkit-scrollbar-thumb:hover {
+                background: #475569;
+            }
+            
+            /* File Uploader Custom Styling (Pink Theme) */
+            [data-testid="stFileUploaderDropzone"] {
+                background: linear-gradient(135deg, rgba(236, 72, 153, 0.05) 0%, rgba(219, 39, 119, 0.1) 100%) !important;
+                border: 2px dashed rgba(236, 72, 153, 0.4) !important;
+                border-radius: 16px !important;
+                padding: 2rem !important;
+                transition: all 0.3s ease !important;
+            }
+            [data-testid="stFileUploaderDropzone"]:hover {
+                background: linear-gradient(135deg, rgba(236, 72, 153, 0.1) 0%, rgba(219, 39, 119, 0.2) 100%) !important;
+                border-color: rgba(236, 72, 153, 0.8) !important;
+                transform: translateY(-2px);
+                box-shadow: 0 8px 25px rgba(236, 72, 153, 0.15);
+            }
+            /* File Uploader 'Browse Files' Button */
+            [data-testid="stFileUploaderDropzone"] button {
+                background: linear-gradient(135deg, #ec4899 0%, #db2777 100%) !important;
+                border: none !important;
+                color: white !important;
+                border-radius: 8px !important;
+                font-weight: 600 !important;
+                padding: 0.5rem 1rem !important;
+                box-shadow: 0 4px 15px rgba(236, 72, 153, 0.3) !important;
+                transition: all 0.3s ease !important;
+            }
+            [data-testid="stFileUploaderDropzone"] button:hover {
+                background: linear-gradient(135deg, #f472b6 0%, #be185d 100%) !important;
+                box-shadow: 0 6px 20px rgba(236, 72, 153, 0.4) !important;
+                transform: translateY(-1px);
+            }
+            
+            /* File Uploader Uploaded Files List Item Icon */
+            [data-testid="stFileUploaderDropzone"] svg {
+                fill: #ec4899 !important;
+                color: #ec4899 !important;
+            }
+            
+            /* File Uploader Status Text */
+            [data-testid="stFileUploaderDropzone"] small {
+                color: #fbcfe8 !important;
+                font-weight: 500 !important;
+            }
+            
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def show_empty_state():
+    """Display a beautifully styled empty state instead of a notification bar."""
+    st.markdown(
+        """
+        <div style='text-align: center; padding: 6rem 2rem; border: 1px dashed rgba(255, 255, 255, 0.1); border-radius: 24px; margin: 3rem 0; background: linear-gradient(180deg, rgba(30, 41, 59, 0.4) 0%, rgba(15, 23, 42, 0.4) 100%); backdrop-filter: blur(12px); box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2); transition: all 0.4s ease;'>
+            <div style='font-size: 5rem; margin-bottom: 1.5rem; animation: float 3s ease-in-out infinite; text-shadow: 0 10px 20px rgba(0,0,0,0.2);'>📄</div>
+            <h3 style='color: #f8fafc; margin-bottom: 1rem; font-weight: 700; font-size: 1.8rem; font-family: "Outfit", sans-serif;'>No Python Files Selected</h3>
+            <p style='color: #94a3b8; font-size: 1.15rem; max-width: 450px; margin: 0 auto; line-height: 1.6;'>Browse your directory or upload files from the sidebar to dive into intelligent code reviews.</p>
+        </div>
+        <style>
+            @keyframes float {
+                0% { transform: translateY(0px); }
+                50% { transform: translateY(-12px); }
+                100% { transform: translateY(0px); }
+            }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _list_workspace_python_files(root_dir: str):
+    """Return absolute paths for Python files in the workspace."""
+    py_files = []
+    ignored_dirs = {".git", "__pycache__", ".venv", "venv"}
+
+    for dir_path, dir_names, file_names in os.walk(root_dir):
+        dir_names[:] = [d for d in dir_names if d not in ignored_dirs and not d.startswith(".")]
+        for file_name in file_names:
+            if file_name.endswith(".py"):
+                py_files.append(os.path.abspath(os.path.join(dir_path, file_name)))
+
+    return sorted(py_files, key=lambda p: p.lower())
+
+# Initialize session state for tracking uploaded files
+if "uploaded_file_paths" not in st.session_state:
+    st.session_state.uploaded_file_paths = []
+if "fixes_applied" not in st.session_state:
+    st.session_state.fixes_applied = False
+
+def calculate_aggregate_metrics(file_list):
+    """Calculate aggregate metrics across all files.
+    
+    Args:
+        file_list: List of file paths to analyze
+        
+    Returns:
+        Dictionary with aggregated metrics
+    """
+    total_functions = 0
+    total_documented = 0
+    total_undocumented = 0
+    total_mi = 0
+    file_count = 0
+    file_details = []
+    
+    for file_path in file_list:
+        if not os.path.exists(file_path):
+            continue
+            
+        try:
+            entities = get_entity_list(file_path)
+            func_entities = [e for e in entities if e.get("Type") in ("Function", "Method")]
+            
+            file_funcs = len(func_entities)
+            file_documented = sum(1 for e in func_entities if e.get("Has Docstring"))
+            file_undocumented = file_funcs - file_documented
+            file_coverage = (file_documented / file_funcs * 100) if file_funcs > 0 else 0.0
+            
+            mi = get_maintainability_index(file_path)
+            
+            total_functions += file_funcs
+            total_documented += file_documented
+            total_undocumented += file_undocumented
+            total_mi += mi
+            file_count += 1
+            
+            file_details.append({
+                "file": os.path.basename(file_path),
+                "functions": file_funcs,
+                "documented": file_documented,
+                "coverage": file_coverage,
+                "mi": mi
+            })
+        except (SyntaxError, Exception):
+            continue
+    
+    avg_coverage = (total_documented / total_functions * 100) if total_functions > 0 else 0.0
+    avg_mi = total_mi / file_count if file_count > 0 else 0.0
+    
+    return {
+        "total_functions": total_functions,
+        "total_documented": total_documented,
+        "total_undocumented": total_undocumented,
+        "avg_coverage": avg_coverage,
+        "avg_mi": avg_mi,
+        "file_count": file_count,
+        "file_details": file_details
+    }
+
+
+def _collect_callable_nodes(analysis: dict) -> list:
+    """Return flat list of functions and methods from analyze_file output."""
+    callables = list(analysis.get("functions", []))
+    for cls in analysis.get("classes", []):
+        callables.extend(cls.get("methods", []))
+    return callables
+
+
+def _get_docstring_issue(func_info: dict, style: str) -> str | None:
+    """Return issue code for a callable docstring: missing/style/None."""
+    doc = func_info.get("docstring")
+    if not doc or not str(doc).strip():
+        return "missing"
+
+    normalized = str(doc)
+    style_key = (style or "google").strip().lower()
+
+    needs_args = bool(func_info.get("args"))
+    needs_yields = bool(func_info.get("has_yield"))
+    needs_returns = bool(func_info.get("has_return")) and not needs_yields
+    needs_raises = bool(func_info.get("has_raises"))
+
+    # Summary-only docstrings can be style-agnostic when no section is needed.
+    if not any([needs_args, needs_yields, needs_returns, needs_raises]):
+        return None
+
+    def has_google_section(name: str) -> bool:
+        return re.search(rf"(?m)^\s*{re.escape(name)}:\s*$", normalized) is not None
+
+    def has_numpy_section(name: str) -> bool:
+        return re.search(rf"(?ms)^\s*{re.escape(name)}\s*$\n\s*-{{3,}}\s*$", normalized) is not None
+
+    if style_key == "google":
+        if needs_args and not has_google_section("Args"):
+            return "style"
+        if needs_yields and not has_google_section("Yields"):
+            return "style"
+        if needs_returns and not has_google_section("Returns"):
+            return "style"
+        if needs_raises and not has_google_section("Raises"):
+            return "style"
+        return None
+
+    if style_key == "numpy":
+        if needs_args and not has_numpy_section("Parameters"):
+            return "style"
+        if needs_yields and not has_numpy_section("Yields"):
+            return "style"
+        if needs_returns and not has_numpy_section("Returns"):
+            return "style"
+        if needs_raises and not has_numpy_section("Raises"):
+            return "style"
+        return None
+
+    # reST checks
+    if needs_args and re.search(r"(?m):param\s+\w+\s*:", normalized) is None:
+        return "style"
+    if needs_yields and re.search(r"(?m):yields?\s*:", normalized) is None:
+        return "style"
+    if needs_returns and re.search(r"(?m):returns?\s*:", normalized) is None:
+        return "style"
+    if needs_raises and re.search(r"(?m):raises\s+", normalized) is None:
+        return "style"
+    return None
+
+def main():
+    """Main function for AI Code Reviewer."""
+    import pandas as pd
+    import plotly.express as px
+    
+    # Apply enhanced UI theme
+    enhanced_ui.apply_enhanced_theme()
+
+    if "current_page" not in st.session_state:
+        st.session_state.current_page = "Home"
+    elif st.session_state.current_page == "Dashboard":
+        # Migrate old session value after page rename.
+        st.session_state.current_page = "Home"
+    elif st.session_state.current_page == "📊 Analytics":
+        # Migrate old decorated label to internal page key.
+        st.session_state.current_page = "Analytics"
+
+    st.sidebar.title("🧠 AI Code Reviewer")
+    st.sidebar.caption("Smart code analysis with advanced analytics")
+
+    page_icons = {
+        "Home": "🏠",
+        "Analytics": "📊",
+        "Coverage Report": "📄",
+        "Docstring": "📝",
+        "Docstring Coverage": "📘",
+        "Function Details": "🔍",
+        "JSON Output": "🧾",
+        "Source Code": "💻",
+        "Validation": "✅",
+    }
+
+    other_pages = [
+        "Analytics",
+        "Coverage Report",
+        "Docstring",
+        "Docstring Coverage",
+        "Function Details",
+        "JSON Output",
+        "Source Code",
+        "Validation",
+    ]
+    pages = ["Home"] + sorted(other_pages, key=lambda page_name: page_name.lower())
+    if st.session_state.current_page not in pages:
+        st.session_state.current_page = "Home"
+
+    view = st.sidebar.selectbox(
+        "Page",
+        pages,
+        format_func=lambda value: f"{page_icons.get(value, '📌')} {value}",
+        key="current_page"
+    )
+
+    if "docstring_style" not in st.session_state:
+        st.session_state.docstring_style = "google"
+    
+    output_json = st.sidebar.text_input("Output JSON path", value="storage/review_logs.json")
+    if view == "Docstring":
+        docstring_style = st.session_state.docstring_style
+        st.sidebar.caption("Docstring style can be changed on the Docstring page.")
+    else:
+        docstring_style = st.sidebar.selectbox(
+            "Docstring Style",
+            ["google", "numpy", "rest"],
+            format_func=lambda value: value.upper(),
+            key="docstring_style"
+        )
+    
+    if view == "Analytics":
+        dashboard.show_analytics_dashboard()
+        return
+    
+    elif view == "Home":
+        st.markdown("<h1 style='text-align: center; margin-bottom: 2rem;'>🚀 Home</h1>", unsafe_allow_html=True)
+        st.markdown("<div class='ui-section-title'>📂 1. Select Files or Folder</div>", unsafe_allow_html=True)
+        
+        # Bigger styled container for file selection on Home
+        file_container = st.container()
+        
+        st.markdown("<div class='ui-section-title'>🛠️ 2. Choose an Analysis Tool</div>", unsafe_allow_html=True)
+        btn_container = st.container()
+    else:
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("### 📂 File Selection")
+        file_container = st.sidebar
+        btn_container = None
+
+    file_selection_method = "Workspace Files (real paths)"
+
+    uploaded_file_paths = []
+    use_uploaded_files = False
+    
+    uploaded_files = file_container.file_uploader(
+        "Drag and drop Python files OR entire folders here",
+        type=["py"],
+        accept_multiple_files=True,
+        key="uploaded_files_widget",
+    )
+
+    if uploaded_files:
+        workspace_root = os.path.abspath(os.getcwd())
+        workspace_files = _list_workspace_python_files(workspace_root)
+
+        rel_lookup = {}
+        base_lookup = {}
+        for abs_path in workspace_files:
+            rel_path = os.path.relpath(abs_path, workspace_root).replace("\\", "/").lower()
+            rel_lookup[rel_path] = abs_path
+
+            base_name = os.path.basename(abs_path).lower()
+            base_lookup.setdefault(base_name, []).append(abs_path)
+
+        unresolved_names = []
+        ambiguous_names = []
+
+        for uploaded_file in uploaded_files:
+            raw_name = (uploaded_file.name or "").strip()
+            if not raw_name:
+                continue
+
+            normalized_name = raw_name.replace("\\", "/").lstrip("./").lower()
+            resolved_path = rel_lookup.get(normalized_name)
+
+            if resolved_path is None:
+                base_name = os.path.basename(normalized_name)
+                matches = base_lookup.get(base_name, [])
+                if len(matches) == 1:
+                    resolved_path = matches[0]
+                elif len(matches) > 1:
+                    root_matches = [m for m in matches if os.path.dirname(m).lower() == workspace_root.lower()]
+                    if len(root_matches) == 1:
+                        resolved_path = root_matches[0]
+                    else:
+                        ambiguous_names.append(raw_name)
+                        resolved_path = None
+
+            if resolved_path and os.path.exists(resolved_path):
+                uploaded_file_paths.append(os.path.abspath(resolved_path))
+            else:
+                unresolved_names.append(raw_name)
+
+        uploaded_file_paths = list(dict.fromkeys(uploaded_file_paths))
+        st.session_state.uploaded_file_paths = uploaded_file_paths
+
+        if uploaded_file_paths:
+            file_container.info(f"📂 {len(uploaded_file_paths)} workspace file(s) selected (no temp copy)")
+        if unresolved_names:
+            file_container.warning(
+                "Could not map these uploaded names to files in current workspace: "
+                + ", ".join(unresolved_names)
+            )
+        if ambiguous_names:
+            file_container.warning(
+                "Multiple files share these names in workspace. Select by unique path: "
+                + ", ".join(ambiguous_names)
+            )
+    else:
+        uploaded_file_paths = []
+        st.session_state.uploaded_file_paths = uploaded_file_paths
+
+    # Get file to scan
+    if uploaded_file_paths:
+        file_list = uploaded_file_paths
+        display_name = f"{len(uploaded_file_paths)} workspace file(s)"
+    else:
+        file_list = []
+        display_name = None
+
+    files_to_display = file_list
+    show_all_files = True
+
+    if view == "Home":
+        with btn_container:
+            col1, col2, col3 = st.columns(3)
+            def go_to_page(page_name):
+                st.session_state.current_page = page_name
+            
+            # Additional styles for big buttons
+            st.markdown(
+                """
+                <style>
+                div[data-testid="stButton"] button {
+                    height: 80px;
+                    font-size: 1.2rem !important;
+                    margin-bottom: 1rem;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True
+            )
+            
+            with col1:
+                st.button("📘 Docstring Coverage", on_click=go_to_page, args=("Docstring Coverage",), use_container_width=True)
+                st.button("⚙️ Function Details", on_click=go_to_page, args=("Function Details",), use_container_width=True)
+                st.button("📝 Docstring", on_click=go_to_page, args=("Docstring",), use_container_width=True)
+            with col2:
+                st.button("📈 Analytics", on_click=go_to_page, args=("Analytics",), use_container_width=True)
+                st.button("✅ Validation", on_click=go_to_page, args=("Validation",), use_container_width=True)
+                st.button("📄 Source Code", on_click=go_to_page, args=("Source Code",), use_container_width=True)
+            with col3:
+                st.button("📊 Coverage Report", on_click=go_to_page, args=("Coverage Report",), use_container_width=True)
+                st.button("📋 JSON Output", on_click=go_to_page, args=("JSON Output",), use_container_width=True)
+
+        st.markdown("<div class='ui-section-title'>📊 3. Visual Report</div>", unsafe_allow_html=True)
+        if file_list:
+            import plotly.express as px
+            import plotly.graph_objects as go
+            import pandas as pd
+
+            agg_metrics = calculate_aggregate_metrics(file_list)
+            file_details = agg_metrics.get("file_details", [])
+
+            if not file_details:
+                st.warning("No valid Python files could be analyzed from your selection.")
+            elif len(file_details) > 1:
+                st.info(f"📁 Visual report generated for {len(file_details)} selected files")
+
+                st.markdown("#### 📌 Average of Selected Files")
+                m1, m2, m3, m4 = st.columns(4)
+                avg_functions = agg_metrics["total_functions"] / agg_metrics["file_count"] if agg_metrics["file_count"] else 0
+                avg_documented = agg_metrics["total_documented"] / agg_metrics["file_count"] if agg_metrics["file_count"] else 0
+                avg_missing = agg_metrics["total_undocumented"] / agg_metrics["file_count"] if agg_metrics["file_count"] else 0
+                m1.metric("Avg Functions / File", f"{avg_functions:.1f}")
+                m2.metric("Avg Documented / File", f"{avg_documented:.1f}")
+                m3.metric("Avg Missing / File", f"{avg_missing:.1f}")
+                m4.metric("Avg Coverage", f"{agg_metrics['avg_coverage']:.1f}%")
+                st.caption(
+                    f"Totals: {agg_metrics['file_count']} files • {agg_metrics['total_functions']} functions • "
+                    f"{agg_metrics['total_documented']} documented • MI {agg_metrics['avg_mi']:.2f} (avg)"
+                )
+
+                df_multi = pd.DataFrame(file_details)
+                df_multi["undocumented"] = df_multi["functions"] - df_multi["documented"]
+
+                st.markdown("#### 📊 Combined Comparison")
+                chart_col1, chart_col2 = st.columns(2)
+
+                with chart_col1:
+                    fig_pie = px.pie(
+                        df_multi,
+                        names="file",
+                        values="undocumented",
+                        title="Missing Docstrings by File",
+                        hole=0.45,
+                        color_discrete_sequence=px.colors.sequential.RdPu,
+                    )
+                    fig_pie.update_layout(
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        font=dict(color="#f8fafc"),
+                    )
+                    st.plotly_chart(fig_pie, use_container_width=True)
+
+                with chart_col2:
+                    fig_stack = go.Figure(
+                        data=[
+                            go.Bar(
+                                name="Documented",
+                                x=df_multi["file"],
+                                y=df_multi["documented"],
+                                marker_color="#10b981",
+                            ),
+                            go.Bar(
+                                name="Missing",
+                                x=df_multi["file"],
+                                y=df_multi["undocumented"],
+                                marker_color="#ef4444",
+                            ),
+                        ]
+                    )
+                    fig_stack.update_layout(
+                        title="Documentation Status per File",
+                        barmode="stack",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0.03)",
+                        font=dict(color="#f8fafc"),
+                    )
+                    st.plotly_chart(fig_stack, use_container_width=True)
+
+                chart_col3, chart_col4 = st.columns(2)
+
+                with chart_col3:
+                    fig_cov = px.bar(
+                        df_multi,
+                        x="file",
+                        y="coverage",
+                        title="Coverage % by File",
+                        color="coverage",
+                        color_continuous_scale="RdYlGn",
+                        range_y=[0, 100],
+                    )
+                    fig_cov.update_layout(
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0.03)",
+                        font=dict(color="#f8fafc"),
+                    )
+                    st.plotly_chart(fig_cov, use_container_width=True)
+
+                with chart_col4:
+                    fig_scatter = px.scatter(
+                        df_multi,
+                        x="functions",
+                        y="coverage",
+                        size="mi",
+                        color="undocumented",
+                        text="file",
+                        title="Function Count vs Coverage (bubble = MI)",
+                        color_continuous_scale="Plasma",
+                    )
+                    fig_scatter.update_traces(textposition="top center")
+                    fig_scatter.update_layout(
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0.03)",
+                        font=dict(color="#f8fafc"),
+                    )
+                    st.plotly_chart(fig_scatter, use_container_width=True)
+
+                with st.expander("📋 Per-file report table", expanded=True):
+                    report_df = df_multi[["file", "functions", "documented", "undocumented", "coverage", "mi"]].copy()
+                    report_df.columns = ["File", "Functions", "Documented", "Missing", "Coverage %", "MI"]
+                    report_df["Coverage %"] = report_df["Coverage %"].map(lambda value: round(value, 2))
+                    report_df["MI"] = report_df["MI"].map(lambda value: round(value, 2))
+                    st.dataframe(report_df, use_container_width=True)
+
+                st.markdown("#### 📄 Single File Report")
+                selected_dashboard_file = st.selectbox(
+                    "Choose one selected file for detailed report",
+                    options=df_multi["file"].tolist(),
+                    key="dashboard_single_file_report",
+                )
+
+                selected_row = df_multi[df_multi["file"] == selected_dashboard_file].iloc[0]
+                single_functions = int(selected_row["functions"])
+                single_documented = int(selected_row["documented"])
+                single_missing = int(selected_row["undocumented"])
+                single_coverage = float(selected_row["coverage"])
+                single_mi = float(selected_row["mi"])
+
+                s1, s2, s3, s4 = st.columns(4)
+                s1.metric("Functions", single_functions)
+                s2.metric("Documented", single_documented)
+                s3.metric("Missing", single_missing)
+                s4.metric("Coverage", f"{single_coverage:.1f}%")
+
+                single_col1, single_col2 = st.columns(2)
+                with single_col1:
+                    single_status_df = pd.DataFrame(
+                        [
+                            {"Status": "Documented", "Count": single_documented},
+                            {"Status": "Missing Docstrings", "Count": single_missing},
+                        ]
+                    )
+                    fig_single_pie = px.pie(
+                        single_status_df,
+                        names="Status",
+                        values="Count",
+                        title=f"Docstring Status for {selected_dashboard_file}",
+                        hole=0.45,
+                        color="Status",
+                        color_discrete_map={
+                            "Documented": "#10b981",
+                            "Missing Docstrings": "#ef4444",
+                        },
+                    )
+                    fig_single_pie.update_layout(
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        font=dict(color="#f8fafc"),
+                    )
+                    st.plotly_chart(fig_single_pie, use_container_width=True)
+
+                with single_col2:
+                    fig_single_gauge = go.Figure(
+                        go.Indicator(
+                            mode="gauge+number",
+                            value=single_coverage,
+                            title={"text": f"Coverage + MI {single_mi:.2f}"},
+                            gauge={
+                                "axis": {"range": [0, 100]},
+                                "bar": {"color": "#6366f1"},
+                                "steps": [
+                                    {"range": [0, 50], "color": "#7f1d1d"},
+                                    {"range": [50, 80], "color": "#78350f"},
+                                    {"range": [80, 100], "color": "#064e3b"},
+                                ],
+                            },
+                        )
+                    )
+                    fig_single_gauge.update_layout(
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        font=dict(color="#f8fafc"),
+                    )
+                    st.plotly_chart(fig_single_gauge, use_container_width=True)
+            else:
+                file_to_scan = file_list[0]
+                if os.path.exists(file_to_scan):
+                    file_name = os.path.basename(file_to_scan)
+                    try:
+                        entities = get_entity_list(file_to_scan)
+                        func_entities = [e for e in entities if e.get("Type") in ("Function", "Method")]
+                        total_funcs = len(func_entities)
+                        documented = sum(1 for e in func_entities if e.get("Has Docstring"))
+                        undocumented = total_funcs - documented
+                        coverage = (documented / total_funcs * 100) if total_funcs > 0 else 0.0
+                        mi = get_maintainability_index(file_to_scan)
+
+                        if total_funcs > 0:
+                            st.info(f"📄 Visual report for {file_name}")
+
+                            s1, s2, s3, s4 = st.columns(4)
+                            s1.metric("Functions", total_funcs)
+                            s2.metric("Documented", documented)
+                            s3.metric("Missing", undocumented)
+                            s4.metric("Coverage", f"{coverage:.1f}%")
+
+                            chart_col1, chart_col2 = st.columns(2)
+
+                            with chart_col1:
+                                df_status = pd.DataFrame(
+                                    [
+                                        {"Status": "Documented", "Count": documented},
+                                        {"Status": "Missing Docstrings", "Count": undocumented},
+                                    ]
+                                )
+                                fig_status = px.pie(
+                                    df_status,
+                                    names="Status",
+                                    values="Count",
+                                    title=f"Docstring Status for {file_name}",
+                                    hole=0.45,
+                                    color="Status",
+                                    color_discrete_map={
+                                        "Documented": "#10b981",
+                                        "Missing Docstrings": "#ef4444",
+                                    },
+                                )
+                                fig_status.update_layout(
+                                    paper_bgcolor="rgba(0,0,0,0)",
+                                    plot_bgcolor="rgba(0,0,0,0)",
+                                    font=dict(color="#f8fafc"),
+                                )
+                                st.plotly_chart(fig_status, use_container_width=True)
+
+                            with chart_col2:
+                                fig_gauge = go.Figure(
+                                    go.Indicator(
+                                        mode="gauge+number",
+                                        value=coverage,
+                                        title={"text": "Documentation Coverage"},
+                                        gauge={
+                                            "axis": {"range": [0, 100]},
+                                            "bar": {"color": "#6366f1"},
+                                            "steps": [
+                                                {"range": [0, 50], "color": "#7f1d1d"},
+                                                {"range": [50, 80], "color": "#78350f"},
+                                                {"range": [80, 100], "color": "#064e3b"},
+                                            ],
+                                        },
+                                    )
+                                )
+                                fig_gauge.update_layout(
+                                    paper_bgcolor="rgba(0,0,0,0)",
+                                    font=dict(color="#f8fafc"),
+                                )
+                                st.plotly_chart(fig_gauge, use_container_width=True)
+
+                            type_rows = []
+                            for entity in func_entities:
+                                type_rows.append(
+                                    {
+                                        "Type": entity.get("Type", "Unknown"),
+                                        "Documented": "Yes" if entity.get("Has Docstring") else "No",
+                                    }
+                                )
+
+                            if type_rows:
+                                df_type = pd.DataFrame(type_rows)
+                                summary_by_type = (
+                                    df_type.groupby(["Type", "Documented"]).size().reset_index(name="Count")
+                                )
+                                fig_type = px.bar(
+                                    summary_by_type,
+                                    x="Type",
+                                    y="Count",
+                                    color="Documented",
+                                    barmode="group",
+                                    title="Function/Method Documentation Split",
+                                    color_discrete_map={"Yes": "#10b981", "No": "#ef4444"},
+                                )
+                                fig_type.update_layout(
+                                    paper_bgcolor="rgba(0,0,0,0)",
+                                    plot_bgcolor="rgba(0,0,0,0.03)",
+                                    font=dict(color="#f8fafc"),
+                                )
+                                st.plotly_chart(fig_type, use_container_width=True)
+
+                            st.caption(f"Maintainability Index (MI): {mi:.2f}")
+                        else:
+                            st.info(f"No functions found in {file_name}")
+                    except Exception:
+                        st.error("Error analyzing file.")
+        else:
+            show_empty_state()
+
+        return  # End execution for Home to prevent rendering other views
+
+    if len(file_list) > 1:
+        file_options = {"All selected files": None}
+        for i, file_path in enumerate(file_list, start=1):
+            file_options[f"{i}. {os.path.basename(file_path)}"] = file_path
+
+        selected_scope = st.selectbox(
+            "Select file report at top",
+            options=list(file_options.keys()),
+            index=1,
+            key="selected_file_scope"
+        )
+
+        if file_options[selected_scope] is None:
+            files_to_display = file_list
+            show_all_files = True
+        else:
+            files_to_display = [file_options[selected_scope]]
+            show_all_files = False
+
+    st.markdown(f"### {('✅ Validation' if view == 'Validation' else '📘 ' + view) if view in ['Validation', 'Docstring Coverage'] else '📊 ' + view}")
+    summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
+    summary_col1.metric("Selected Files", len(file_list))
+    summary_col2.metric("View Scope", "All" if show_all_files else "Single")
+    summary_col3.metric("Docstring Style", docstring_style.upper())
+    summary_col4.metric("Selection Mode", file_selection_method)
+    if display_name:
+        st.caption(f"Working on: {display_name}")
+
+    if view in ["Docstring Coverage", "Validation"]:
+        if view == "Validation":
+            last_fix_result = st.session_state.pop("validation_last_fix_result", None)
+            if last_fix_result:
+                status_type = last_fix_result.get("type", "success")
+                message = last_fix_result.get("message", "")
+                if status_type == "warning":
+                    st.warning(message)
+                else:
+                    st.success(message)
+        
+        if file_list:
+            missing_doc_items = []
+            for file_to_scan in files_to_display:
+                if not os.path.exists(file_to_scan):
+                    continue
+                try:
+                    entities = get_entity_list(file_to_scan)
+                except SyntaxError:
+                    continue
+
+                for entity in entities:
+                    if not entity.get("Has Docstring"):
+                        missing_doc_items.append({
+                            "file_path": file_to_scan,
+                            "file_name": os.path.basename(file_to_scan),
+                            "name": entity.get("Function Name"),
+                            "type": entity.get("Type"),
+                            "line": entity.get("Start Line"),
+                        })
+
+            if view == "Validation":
+                col_title, col_btn = st.columns([4, 1])
+                with col_title:
+                    st.markdown("<div class='ui-section-title'>🧩 Missing Docstrings</div>", unsafe_allow_html=True)
+                with col_btn:
+                    if missing_doc_items:
+                        if st.button("✨ Fix All Missing", key="bulk_fix_missing", use_container_width=True):
+                            files_to_fix = sorted({item["file_path"] for item in missing_doc_items})
+                            fixed_count = 0
+                            for target in files_to_fix:
+                                if os.path.exists(target):
+                                    apply_missing_docstrings(target, style=docstring_style)
+                                    fixed_count += 1
+                            st.session_state["validation_last_fix_result"] = {
+                                "type": "success",
+                                "message": f"✅ Auto-fixed missing docstrings in {fixed_count} file(s)."
+                            }
+                            st.cache_data.clear()
+                            st.rerun()
+                if missing_doc_items:
+                    grouped_missing = {}
+                    for item in missing_doc_items:
+                        grouped_missing.setdefault(item["file_name"], []).append(item)
+                    for fname, items in grouped_missing.items():
+                        with st.expander(f"📄 {fname} ({len(items)} missing)", expanded=True):
+                            for idx, it in enumerate(items):
+                                card_col, btn_col = st.columns([6, 1])
+                                with card_col:
+                                    st.markdown(f'''
+                                    <div style="background-color: rgba(239, 68, 68, 0.1); border-left: 4px solid #ef4444; padding: 12px; margin-bottom: 8px; border-radius: 4px;">
+                                        <span style="color: #ef4444; font-weight: bold; background: rgba(239, 68, 68, 0.2); padding: 2px 6px; border-radius: 4px; margin-right: 8px;">Missing</span>
+                                        <strong style="color: #f8fafc; font-size: 1.1em;">{it['name']}</strong> 
+                                        <span style="color: #94a3b8; font-size: 0.9em; float: right;">Type: {it['type']} | Line: {it['line']}</span>
+                                    </div>
+                                    ''', unsafe_allow_html=True)
+                                with btn_col:
+                                    st.markdown("<div style='margin-top:20px'></div>", unsafe_allow_html=True)
+                                    if st.button("🛠️ Fix", key=f"fix_m_{fname}_{it['line']}_{idx}", use_container_width=True):
+                                        apply_missing_docstrings(it["file_path"], style=docstring_style)
+                                        st.session_state["validation_last_fix_result"] = {
+                                            "type": "success",
+                                            "message": f"✅ Fixed missing docstring in {fname} at line {it['line']}."
+                                        }
+                                        st.cache_data.clear()
+                                        st.rerun()
+                else:
+                    st.success("✅ All functions and methods have docstrings in current scope.")
+
+            if view != "Validation":
+                if st.button("Generate Coverage Report"):
+                    with st.spinner("Generating..."):
+                        report = generate_coverage_report(file_list, include_pydocstyle=True)
+                        output_dir = os.path.dirname(output_json)
+                        if output_dir:
+                            os.makedirs(output_dir, exist_ok=True)
+                        with open(output_json, "w") as f:
+                            json.dump(report, f, indent=4)
+                        st.success("✅ Report Generated!")
+
+            detailed_violations = []
+            pydoc_report = generate_coverage_report(files_to_display, include_pydocstyle=True).get("pydocstyle", {})
+            st.markdown("<div class='ui-section-title'>🧪 pydocstyle Checks</div>", unsafe_allow_html=True)
+            if pydoc_report.get("available", False):
+                col1, col2 = st.columns(2)
+                col1.metric("Files with Violations", pydoc_report.get("files_with_violations", 0))
+                col2.metric("Total Violations", pydoc_report.get("total_violations", 0))
+
+                violation_rows = []
+                for path, details in pydoc_report.get("details", {}).items():
+                    count = details.get("violations_count", 0)
+                    if count > 0:
+                        violation_rows.append({
+                            "File": os.path.basename(path),
+                            "Violations": count,
+                        })
+
+                if violation_rows:
+                    st.dataframe(violation_rows, use_container_width=True)
+
+                    if view == "Validation":
+                        for path, details in pydoc_report.get("details", {}).items():
+                            violation_items = details.get("violations_detailed", [])
+
+                            if violation_items:
+                                for violation in violation_items:
+                                    message = violation.get("message", "")
+                                    function_match = re.search(r"`([^`]+)`", message)
+                                    symbol_name = function_match.group(1) if function_match else "-"
+
+                                    detailed_violations.append({
+                                        "file_path": violation.get("file_path", path),
+                                        "File": os.path.basename(violation.get("file_path", path)),
+                                        "Function / Symbol": symbol_name,
+                                        "Line": violation.get("line"),
+                                        "Rule": violation.get("code", "-"),
+                                        "Message": message,
+                                    })
+                            else:
+                                for violation in details.get("violations", []):
+                                    code_match = re.search(r"\b(D\d{3})\b", violation)
+                                    code = code_match.group(1) if code_match else "-"
+                                    line_match = re.search(r":(\d+)\b", violation)
+                                    line_no = int(line_match.group(1)) if line_match else None
+
+                                    message = violation
+                                    if code_match:
+                                        message = violation[code_match.end():].strip(" :.-")
+
+                                    function_match = re.search(r"`([^`]+)`", violation)
+                                    symbol_name = function_match.group(1) if function_match else "-"
+
+                                    detailed_violations.append({
+                                        "file_path": path,
+                                        "File": os.path.basename(path),
+                                        "Function / Symbol": symbol_name,
+                                        "Line": line_no,
+                                        "Rule": code,
+                                        "Message": message,
+                                    })
+
+                        col_title, col_btn = st.columns([4, 1])
+                        with col_title:
+                            st.markdown("<div class='ui-section-title'>🔍 Detailed Docstring Mistakes</div>", unsafe_allow_html=True)
+                        with col_btn:
+                            if detailed_violations:
+                                if st.button("✨ Fix All Mistakes", key="bulk_fix_mistakes", use_container_width=True):
+                                    files_to_fix = sorted({item["file_path"] for item in detailed_violations})
+                                    fixed_count = 0
+                                    for target in files_to_fix:
+                                        if os.path.exists(target):
+                                            fixed_count += apply_docstring_fixes_from_pydocstyle(target, style=docstring_style)
+                                    st.session_state["validation_last_fix_result"] = {
+                                        "type": "success",
+                                        "message": f"✅ Auto-fixed {fixed_count} detailed docstring mistake(s)."
+                                    }
+                                    st.cache_data.clear()
+                                    st.rerun()
+                        if detailed_violations:
+                            grouped_violations = {}
+                            for v in detailed_violations:
+                                grouped_violations.setdefault(v["File"], []).append(v)
+                            for fname, violations in grouped_violations.items():
+                                with st.expander(f"📄 {fname} ({len(violations)} issues)", expanded=True):
+                                    for idx, v in enumerate(violations):
+                                        card_col, btn_col = st.columns([6, 1])
+                                        with card_col:
+                                            st.markdown(f'''
+                                            <div style="background-color: rgba(245, 158, 11, 0.1); border-left: 4px solid #f59e0b; padding: 12px; margin-bottom: 8px; border-radius: 4px;">
+                                                <span style="color: #f59e0b; font-weight: bold; background: rgba(245, 158, 11, 0.2); padding: 2px 6px; border-radius: 4px; margin-right: 8px;">{v['Rule']}</span>
+                                                <strong style="color: #f8fafc; font-size: 1.1em;">{v['Function / Symbol']}</strong> 
+                                                <span style="color: #94a3b8; font-size: 0.9em; float: right;">Line: {v['Line']}</span>
+                                                <div style="margin-top: 8px; color: #cbd5e1; font-size: 0.95em;">{v['Message']}</div>
+                                            </div>
+                                            ''', unsafe_allow_html=True)
+                                        with btn_col:
+                                            st.markdown("<div style='margin-top:24px'></div>", unsafe_allow_html=True)
+                                            if st.button("🛠️ Fix", key=f"fix_d_{fname}_{v['Line']}_{idx}", use_container_width=True):
+                                                if v.get("Line") is not None:
+                                                    fixed = apply_docstring_fix_at_line(v["file_path"], int(v["Line"]), style=docstring_style)
+                                                else:
+                                                    fixed = apply_docstring_fixes_from_pydocstyle(v["file_path"], style=docstring_style) > 0
+                                                
+                                                if fixed:
+                                                    st.session_state["validation_last_fix_result"] = {
+                                                        "type": "success",
+                                                        "message": f"✅ Fixed {v['Rule']} in {fname} at line {v['Line']}."
+                                                    }
+                                                else:
+                                                    st.session_state["validation_last_fix_result"] = {
+                                                        "type": "warning",
+                                                        "message": f"⚠️ Could not fix {v['Rule']} in {fname}."
+                                                    }
+                                                st.cache_data.clear()
+                                                st.rerun()
+                        else:
+                            st.success("✅ No detailed docstring mistakes found.")
+                else:
+                    st.success("✅ No pydocstyle violations found for current scope.")
+            else:
+                st.warning(pydoc_report.get("message", "pydocstyle checks unavailable."))
+
+            if view == "Validation":
+                if missing_doc_items or detailed_violations:
+                    st.markdown("<div class='ui-section-title'>🛠️ Auto Fix All Validation Errors</div>", unsafe_allow_html=True)
+                    
+                    col_title, col_fix_all = st.columns([4, 1])
+                    with col_fix_all:
+                        fix_all_clicked = st.button("✨ Fix Everything", key="auto_fix_all_validation_bottom", use_container_width=True)
+
+                    if fix_all_clicked:
+                        files_for_missing = sorted({item["file_path"] for item in missing_doc_items})
+                        files_for_pydocstyle = sorted({item["file_path"] for item in detailed_violations})
+
+                        fixed_missing_files = 0
+                        for target_file in files_for_missing:
+                            if os.path.exists(target_file):
+                                apply_missing_docstrings(target_file, style=docstring_style)
+                                fixed_missing_files += 1
+
+                        fixed_pydoc_entities = 0
+                        for target_file in files_for_pydocstyle:
+                            fixed_pydoc_entities += apply_docstring_fixes_from_pydocstyle(
+                                target_file,
+                                style=docstring_style,
+                            )
+
+                        st.success(
+                            "✅ Auto-fix all complete: "
+                            f"{fixed_missing_files} file(s) for missing docstrings, "
+                            f"{fixed_pydoc_entities} pydocstyle issue target(s) updated."
+                        )
+                        
+                        # Provide download links for all fixed files
+                        all_fixed_files = sorted(set(files_for_missing) | set(files_for_pydocstyle))
+                        if all_fixed_files and use_uploaded_files:
+                            st.markdown("#### 📥 Download Fixed Files")
+                            for target_file in all_fixed_files:
+                                if os.path.exists(target_file):
+                                    file_content = doc_steward._read_file_with_encoding(target_file)
+                                    file_name = os.path.basename(target_file)
+                                    st.download_button(
+                                        label=f"⬇️ Download {file_name}",
+                                        data=file_content,
+                                        file_name=file_name,
+                                        mime="text/plain",
+                                        key=f"download_allfix_{file_name}_{target_file}"
+                                    )
+                        
+                        st.session_state["validation_last_fix_result"] = {
+                            "type": "success",
+                            "message": (
+                                "✅ Auto-fix all complete: "
+                                f"{fixed_missing_files} file(s) for missing docstrings, "
+                                f"{fixed_pydoc_entities} pydocstyle issue target(s) updated."
+                            ),
+                        }
+                        st.cache_data.clear()
+                        st.rerun()
+                else:
+                    st.success("✅ No validation errors available for auto-fix.")
+
+                if use_uploaded_files and file_list:
+                    st.markdown("<br><hr><br><h2 style='text-align: center;'>📥 Download Modified Files</h2>", unsafe_allow_html=True)
+                    st.markdown(
+                        """
+                        <style>
+                        /* Target the persistent download buttons specifically via their key substrings */
+                        button[data-testid="stBaseButton-secondary"] {
+                            height: 70px !important;
+                            font-size: 1.3rem !important;
+                            width: 100% !important;
+                            border-radius: 12px !important;
+                            font-weight: 700 !important;
+                            box-shadow: 0 4px 15px rgba(16, 185, 129, 0.2) !important;
+                        }
+                        </style>
+                        """, unsafe_allow_html=True
+                    )
+                    cols = st.columns(min(len(file_list), 3))
+                    for i, target_file in enumerate(file_list):
+                        if os.path.exists(target_file):
+                            file_content = doc_steward._read_file_with_encoding(target_file)
+                            file_name = os.path.basename(target_file)
+                            with cols[i % 3]:
+                                st.download_button(
+                                    label=f"⬇️ Download {file_name}",
+                                    data=file_content,
+                                    file_name=file_name,
+                                    mime="text/plain",
+                                    key=f"persistent_dl_bottom_{file_name}_{i}"
+                                )
+                    st.markdown("<div style='margin-bottom: 40px;'></div>", unsafe_allow_html=True)
+            
+            # Display aggregate coverage report
+            if len(file_list) > 1 and show_all_files:
+                st.markdown("<div class='ui-section-title'>📊 Aggregate Coverage Report</div>", unsafe_allow_html=True)
+                agg_metrics = calculate_aggregate_metrics(file_list)
+                
+                col1, col2, col3, col4, col5 = st.columns(5)
+                col1.metric("📁 Files", agg_metrics["file_count"])
+                col2.metric("Total Functions", agg_metrics["total_functions"])
+                col3.metric("Documented", agg_metrics["total_documented"])
+                col4.metric("Undocumented", agg_metrics["total_undocumented"])
+                col5.metric("Avg Coverage (%)", f"{round(agg_metrics['avg_coverage'], 1)}%")
+                
+                # Show file-wise breakdown table
+                st.markdown("<div class='ui-section-title'>File-wise Breakdown</div>", unsafe_allow_html=True)
+                file_breakdown = []
+                for detail in agg_metrics["file_details"]:
+                    file_breakdown.append({
+                        "File": detail["file"],
+                        "Functions": detail["functions"],
+                        "Documented": detail["documented"],
+                        "Coverage (%)": f"{round(detail['coverage'], 1)}%",
+                        "MI": f"{round(detail['mi'], 2)}"
+                    })
+                st.dataframe(file_breakdown, use_container_width=True)
+                st.divider()
+            
+            # Display individual file analysis
+            if len(file_list) > 1 and show_all_files:
+                st.markdown("<div class='ui-section-title'>📄 Individual File Analysis</div>", unsafe_allow_html=True)
+            
+            for file_to_scan in files_to_display:
+                if os.path.exists(file_to_scan):
+                    file_name = os.path.basename(file_to_scan)
+                    st.caption(f"📄 Analyzing: {file_name}")
+                    try:
+                        entities = get_entity_list(file_to_scan)
+                    except SyntaxError:
+                        st.error(f"❌ Syntax Error in {file_name}! Cannot calculate coverage.")
+                        continue
+                    
+                    # Filter ONLY Functions and Methods for the UI
+                    func_entities = [e for e in entities if e.get("Type") in ("Function", "Method")]
+                    
+                    total_funcs = len(func_entities)
+                    documented = sum(1 for e in func_entities if e.get("Has Docstring"))
+                    undocumented = total_funcs - documented
+                    coverage = (documented / total_funcs * 100) if total_funcs > 0 else 0.0
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Total Functions", total_funcs)
+                    col2.metric("Documented", documented)
+                    col3.metric("Undocumented", undocumented)
+                    col4.metric("Coverage (%)", f"{round(coverage, 1)}")
+                    
+                    st.markdown("<div class='ui-section-title'>Function-wise Docstring Status</div>", unsafe_allow_html=True)
+                    
+                    formatted_entities = []
+                    for i, e in enumerate(func_entities):
+                        formatted_entities.append({
+                            "Function Name": e["Function Name"],
+                            "Type": e["Type"],
+                            "Start Line": e["Start Line"],
+                            "End Line": e["End Line"],
+                            "Has Docstring": "✓" if e["Has Docstring"] else "✗"
+                        })
+                        
+                    st.dataframe(formatted_entities, use_container_width=True)
+                    
+                    if total_funcs > documented:
+                        if st.button(f"Apply Missing Docstrings for {file_name}", key=file_to_scan):
+                            apply_missing_docstrings(file_to_scan, style=docstring_style)
+                            st.success(f"✅ Applied using {docstring_style.upper()} style! Reloading...")
+                            st.rerun()
+                    st.divider()
+        else:
+            show_empty_state()
+
+    elif view == "Docstring":
+        if file_list:
+            st.markdown(
+                """
+                <style>
+                    div[data-testid="stRadio"] {
+                        position: sticky;
+                        top: 0.75rem;
+                        z-index: 20;
+                        padding: 0.9rem 1rem;
+                        margin-bottom: 0.5rem;
+                        border-radius: 14px;
+                        border: 1px solid rgba(129, 140, 248, 0.35);
+                        background: rgba(15, 23, 42, 0.75);
+                        backdrop-filter: blur(12px);
+                    }
+
+                    div[data-testid="stRadio"] div[role="radiogroup"] {
+                        display: flex;
+                        justify-content: center;
+                        align-items: center;
+                        gap: 0.65rem;
+                        flex-wrap: wrap;
+                    }
+
+                    div[data-testid="stRadio"] div[role="radiogroup"] > label {
+                        margin: 0;
+                        min-width: 120px;
+                        justify-content: center;
+                        text-align: center;
+                        border-radius: 999px;
+                        border: 1px solid rgba(255, 255, 255, 0.2);
+                        background: rgba(30, 41, 59, 0.75);
+                        padding: 0.45rem 0.95rem;
+                        transition: all 0.25s ease;
+                    }
+
+                    div[data-testid="stRadio"] div[role="radiogroup"] > label:hover {
+                        transform: translateY(-1px);
+                        border-color: rgba(129, 140, 248, 0.8);
+                        box-shadow: 0 6px 16px rgba(99, 102, 241, 0.22);
+                    }
+
+                    div[data-testid="stRadio"] div[role="radiogroup"] > label > div:first-child {
+                        display: none;
+                    }
+
+                    div[data-testid="stRadio"] div[role="radiogroup"] > label:has(input:checked) {
+                        border-color: rgba(192, 132, 252, 0.95);
+                        background: linear-gradient(135deg, rgba(99, 102, 241, 0.65) 0%, rgba(168, 85, 247, 0.65) 100%);
+                        box-shadow: 0 8px 20px rgba(99, 102, 241, 0.34);
+                    }
+
+                    div[data-testid="stRadio"] div[role="radiogroup"] > label span {
+                        color: #f8fafc !important;
+                        font-weight: 700 !important;
+                        letter-spacing: 0.03em;
+                    }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            st.markdown("<div class='ui-section-title'>🧩 Docstring Style</div>", unsafe_allow_html=True)
+            docstring_style = st.radio(
+                "Choose style",
+                options=["google", "numpy", "rest"],
+                format_func=lambda value: value.upper(),
+                horizontal=True,
+                key="docstring_style"
+            )
+            st.caption("Selected style is used for preview, auto-fix, and apply actions on this page.")
+
+            docstring_apply_result = st.session_state.pop("docstring_apply_result", None)
+            if docstring_apply_result:
+                if docstring_apply_result.get("type") == "success":
+                    st.success(docstring_apply_result.get("message", "Docstring updated."))
+                else:
+                    st.warning(docstring_apply_result.get("message", "Could not apply docstring."))
+
+            col_left, col_right = st.columns([1, 2.5])
+            with col_left:
+                st.markdown("<div style='display: flex; align-items: center; gap: 10px;'><h2 style='margin: 0;'>📂 Files</h2></div>", unsafe_allow_html=True)
+                st.caption(f"Total files: {len(file_list)} | Style: {docstring_style.upper()}")
+
+                if "ds_ok_overrides" not in st.session_state:
+                    st.session_state.ds_ok_overrides = set()
+                
+                if "docstring_selected_file" not in st.session_state:
+                    st.session_state.docstring_selected_file = file_list[0] if file_list else None
+                if "docstring_selected_func" not in st.session_state:
+                    st.session_state.docstring_selected_func = None
+                
+                for file_path in file_list:
+                    file_name = os.path.basename(file_path)
+                    try:
+                        analysis = doc_steward.analyze_file(file_path)
+                        funcs = _collect_callable_nodes(analysis)
+                        has_fix_needed = False
+                        for f in funcs:
+                            override_key = f"{file_path}|{int(f.get('line', -1))}|{docstring_style}"
+                            issue = _get_docstring_issue(f, docstring_style)
+                            if issue:
+                                # If the source changed or style switched, do not keep stale OK overrides.
+                                st.session_state.ds_ok_overrides.discard(override_key)
+                                has_fix_needed = True
+                                break
+                    except SyntaxError:
+                        has_fix_needed = False
+                        
+                    status_icon = "🔧 Fix" if has_fix_needed else "✅ OK"
+                    
+                    if st.button(f"{file_name} {status_icon}", key=f"ds_file_{file_path}", use_container_width=True):
+                        st.session_state.docstring_selected_file = file_path
+                        st.session_state.docstring_selected_func = None
+                
+                if st.session_state.docstring_selected_file and os.path.exists(st.session_state.docstring_selected_file):
+                    st.markdown("---")
+                    file_name_display = os.path.basename(st.session_state.docstring_selected_file)
+                    st.markdown(f"**Functions in {file_name_display}**")
+                    try:
+                        analysis = doc_steward.analyze_file(st.session_state.docstring_selected_file)
+                        funcs = _collect_callable_nodes(analysis)
+                        st.caption("Legend: 🔧 Fix | ✅ OK")
+                            
+                        # Resync selected function to capture newly written docstrings into the session
+                        if st.session_state.docstring_selected_func:
+                            old_f = st.session_state.docstring_selected_func
+                            refreshed_match = None
+                            old_line = int(old_f.get("line", -1)) if old_f.get("line") is not None else -1
+                            old_name = old_f.get("name")
+                            old_args = old_f.get("args")
+
+                            for f in funcs:
+                                if int(f.get("line", -2)) == old_line and f.get("name") == old_name:
+                                    refreshed_match = f
+                                    break
+
+                            if refreshed_match is None:
+                                for f in funcs:
+                                    if f.get("name") == old_name and f.get("args") == old_args:
+                                        refreshed_match = f
+                                        break
+
+                            if refreshed_match is not None:
+                                st.session_state.docstring_selected_func = refreshed_match
+                            
+                        for f in funcs:
+                            fn_name = f["name"]
+                            btn_label = fn_name
+                            override_key = f"{st.session_state.docstring_selected_file}|{int(f.get('line', -1))}|{docstring_style}"
+                            issue = _get_docstring_issue(f, docstring_style)
+                            if issue:
+                                # Keep status truthful to current style/content.
+                                st.session_state.ds_ok_overrides.discard(override_key)
+                                btn_label += " 🔧 Fix"
+                            else:
+                                btn_label += " ✅ OK"
+                                
+                            if st.button(btn_label, key=f"ds_func_{fn_name}_{f['line']}", use_container_width=True):
+                                st.session_state.docstring_selected_func = f
+                                
+                        st.markdown("<hr style='margin: 10px 0; opacity: 0.2;'>", unsafe_allow_html=True)
+                        fix_candidates = []
+                        for f in funcs:
+                            override_key = f"{st.session_state.docstring_selected_file}|{int(f.get('line', -1))}|{docstring_style}"
+                            issue = _get_docstring_issue(f, docstring_style)
+                            if issue:
+                                st.session_state.ds_ok_overrides.discard(override_key)
+                                fix_candidates.append(f)
+                        if fix_candidates:
+                            if st.button(f"✨ Auto-Fix All ({len(fix_candidates)})", use_container_width=True, key="ds_fix_all"):
+                                progress_text = "Generating docstrings. Please wait."
+                                my_bar = st.progress(0, text=progress_text)
+                                
+                                for i, f in enumerate(fix_candidates):
+                                    percentage = int((i / len(fix_candidates)) * 100)
+                                    my_bar.progress(percentage, text=f"Processing {f['name']} ({i+1}/{len(fix_candidates)})")
+                                    
+                                    try:
+                                        file_content = doc_steward._read_file_with_encoding(st.session_state.docstring_selected_file)
+                                        lines = file_content.splitlines()
+                                        start_idx = f["line"] - 1
+                                        end_idx = f.get("end_line", start_idx + 1)
+                                        func_code = "\n".join(lines[start_idx:end_idx])
+                                    except Exception:
+                                        continue
+                                        
+                                    if func_code:
+                                        indent = f.get("col_offset", 0) + 4
+                                        gen_doc = doc_steward.generate_docstring_llm(
+                                            func_code=func_code,
+                                            style=docstring_style,
+                                            indent=indent
+                                        )
+                                        applied = apply_docstring_fix_at_line(
+                                            st.session_state.docstring_selected_file, 
+                                            f['line'], 
+                                            style=docstring_style, 
+                                            doc_text_override=gen_doc
+                                        )
+                                        if applied:
+                                            override_key = f"{st.session_state.docstring_selected_file}|{int(f.get('line', -1))}|{docstring_style}"
+                                            st.session_state.ds_ok_overrides.add(override_key)
+                                        func_key = f"{st.session_state.docstring_selected_file}_{f['name']}_{f['line']}_{docstring_style}"
+                                        if "ds_generated_docs" in st.session_state and func_key in st.session_state.ds_generated_docs:
+                                            del st.session_state.ds_generated_docs[func_key]
+                                            
+                                my_bar.progress(100, text="Done!")
+                                st.rerun()
+
+                    except Exception as e:
+                        st.error(f"Error reading file: {e}")
+
+            with col_right:
+                if not st.session_state.docstring_selected_file:
+                    st.info("Select a file from the left to begin.")
+                elif not st.session_state.docstring_selected_func:
+                    st.info("Select a function to view and edit its docstring.")
+                else:
+                    func = st.session_state.docstring_selected_func
+                    st.markdown(f"### Function: <code style='color: #10b981; background: rgba(16, 185, 129, 0.1); padding: 2px 6px; border-radius: 4px;'>{func['name']}</code>", unsafe_allow_html=True)
+                    
+                    col_b, col_a = st.columns(2)
+                    
+                    indent = func.get("col_offset", 0) + 4
+                    prefix = " " * indent
+                    
+                    before_doc = func.get("docstring")
+                    if not before_doc:
+                        before_text_display = "❌ No existing docstring"
+                        before_text_diff = "No existing docstring\n"
+                    else:
+                        b_lines = before_doc.splitlines()
+                        indented_b_lines = [prefix + '"""']
+                        for line in b_lines:
+                            if line.strip() == "":
+                                indented_b_lines.append("")
+                            else:
+                                indented_b_lines.append(prefix + line)
+                        indented_b_lines.append(prefix + '"""')
+                        before_text_display = "\n".join(indented_b_lines)
+                        before_text_diff = before_text_display + "\n"
+                        
+                    func_key = f"{st.session_state.docstring_selected_file}_{func['name']}_{func['line']}_{docstring_style}"
+                    if "ds_generated_docs" not in st.session_state:
+                        st.session_state.ds_generated_docs = {}
+                        
+                    if func_key not in st.session_state.ds_generated_docs:
+                        func_code = ""
+                        try:
+                            file_content = doc_steward._read_file_with_encoding(st.session_state.docstring_selected_file)
+                            lines = file_content.splitlines()
+                            start_idx = func["line"] - 1
+                            end_idx = func["end_line"]
+                            func_code = "\n".join(lines[start_idx:end_idx])
+                        except Exception:
+                            pass
+                            
+                        with st.spinner("🧠 Generating docstring with AI..."):
+                            gen_doc = doc_steward.generate_docstring_llm(
+                                func_code=func_code,
+                                style=docstring_style,
+                                indent=indent
+                            )
+                        st.session_state.ds_generated_docs[func_key] = gen_doc
+                    
+                    new_doc = st.session_state.ds_generated_docs[func_key]
+
+                    before_norm = "\n".join(line.rstrip() for line in before_text_display.strip().splitlines())
+                    after_norm = "\n".join(line.rstrip() for line in new_doc.strip().splitlines())
+                    preview_matches = before_norm == after_norm
+                    current_override_key = f"{st.session_state.docstring_selected_file}|{int(func.get('line', -1))}|{docstring_style}"
+                    if preview_matches:
+                        st.session_state.ds_ok_overrides.add(current_override_key)
+                    
+                    # Do not do ANY manual HTML replacing if using a simple code block or letting markdown handle it natively.
+                    safe_before = before_text_display.replace("<", "&lt;").replace(">", "&gt;")
+                    safe_after = new_doc.replace("<", "&lt;").replace(">", "&gt;")
+                    
+                    with col_b:
+                        st.caption("Before")
+                        st.markdown(f'''<div style="background: rgba(30, 41, 59, 0.4); padding: 1rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); min-height: 250px; overflow-x: auto;">
+```python
+{before_text_display}
+```
+</div>''', unsafe_allow_html=True)
+                        
+                    with col_a:
+                        st.caption("After (Preview)")
+                        st.markdown(f'''<div style="background: rgba(16, 185, 129, 0.05); padding: 1rem; border-radius: 8px; border: 1px solid rgba(16, 185, 129, 0.2); min-height: 250px; position: relative; overflow-x: auto;">
+```python
+{new_doc}
+```
+</div>''', unsafe_allow_html=True)
+                        
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 1])
+                        if preview_matches:
+                            st.success("✅ OK: Before and After match for this function.")
+                        accept_button_text = "✅ OK" if preview_matches else "✅ Accept"
+                        accept_key = f"ds_accept_{func['name']}_{func['line']}_{docstring_style}"
+                        reject_key = f"ds_reject_{func['name']}_{func['line']}_{docstring_style}"
+                        with btn_col1:
+                            if st.button(accept_button_text, use_container_width=True, key=accept_key):
+                                try:
+                                    applied = apply_docstring_fix_at_line(
+                                        st.session_state.docstring_selected_file,
+                                        int(func['line']),
+                                        style=docstring_style,
+                                        doc_text_override=new_doc,
+                                    )
+                                except Exception:
+                                    applied = False
+
+                                if applied:
+                                    st.session_state.ds_ok_overrides.add(current_override_key)
+                                    if func_key in st.session_state.ds_generated_docs:
+                                        del st.session_state.ds_generated_docs[func_key]
+
+                                    refreshed_func = None
+                                    try:
+                                        refreshed_analysis = doc_steward.analyze_file(st.session_state.docstring_selected_file)
+                                        refreshed_funcs = refreshed_analysis.get("functions", [])
+                                        for cls in refreshed_analysis.get("classes", []):
+                                            refreshed_funcs.extend(cls.get("methods", []))
+
+                                        for rf in refreshed_funcs:
+                                            if rf.get("name") == func.get("name") and int(rf.get("line", -2)) == int(func.get("line", -1)):
+                                                refreshed_func = rf
+                                                break
+
+                                        if refreshed_func is None:
+                                            for rf in refreshed_funcs:
+                                                if rf.get("name") == func.get("name") and rf.get("args") == func.get("args"):
+                                                    refreshed_func = rf
+                                                    break
+                                    except Exception:
+                                        refreshed_func = None
+
+                                    if refreshed_func is not None:
+                                        st.session_state.docstring_selected_func = refreshed_func
+                                    else:
+                                        fallback_doc = new_doc.strip()
+                                        if fallback_doc.startswith('"""') and fallback_doc.endswith('"""'):
+                                            fallback_doc = fallback_doc[3:-3].strip("\n")
+                                        elif fallback_doc.startswith("'''") and fallback_doc.endswith("'''"):
+                                            fallback_doc = fallback_doc[3:-3].strip("\n")
+                                        st.session_state.docstring_selected_func = {
+                                            **func,
+                                            "docstring": fallback_doc,
+                                        }
+
+                                    st.session_state["docstring_apply_result"] = {
+                                        "type": "success",
+                                        "message": f"✅ Applied docstring for {func['name']} (line {func['line']})."
+                                    }
+                                else:
+                                    st.session_state["docstring_apply_result"] = {
+                                        "type": "warning",
+                                        "message": f"⚠️ Could not apply docstring for {func['name']} at line {func['line']}."
+                                    }
+                                st.rerun()
+                        with btn_col2:
+                            if st.button("❌ Reject", use_container_width=True, key=reject_key):
+                                st.session_state.docstring_selected_func = None
+                                st.rerun()
+                                
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.caption("Diff")
+                    import difflib
+                    
+                    before_lines = before_text_diff.splitlines(keepends=True) if before_text_diff else []
+                    new_doc_lines = (new_doc + "\\n").splitlines(keepends=True)
+                    
+                    diff = list(difflib.ndiff(before_lines, new_doc_lines))
+                    
+                    if not diff or all(l.startswith('  ') for l in diff):
+                        diff_display = "<span style='color: #94a3b8;'>No changes.</span>"
+                    else:
+                        formatted_diff = []
+                        for line in diff:
+                            raw_line = line
+                            line_safe = line.replace("<", "&lt;").replace(">", "&gt;")
+                            if raw_line.startswith("+ "):
+                                formatted_diff.append(f"<span style='color: #10b981; background: rgba(16, 185, 129, 0.1);'>{line_safe}</span>")
+                            elif raw_line.startswith("- "):
+                                formatted_diff.append(f"<span style='color: #ef4444; background: rgba(239, 68, 68, 0.1);'>{line_safe}</span>")
+                            elif raw_line.startswith("? "):
+                                formatted_diff.append(f"<span style='color: #fbbf24; opacity: 0.8;'>{line_safe}</span>")
+                            else:
+                                formatted_diff.append(f"<span style='color: #94a3b8;'>{line_safe}</span>")
+                        diff_display = "".join(formatted_diff)
+                        
+                    st.markdown(f'''<div style="background: rgba(15, 23, 42, 0.6); padding: 1rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.9em;">
+<pre style="margin: 0; white-space: pre-wrap; font-family: 'Courier New', Courier, monospace !important;">{diff_display}</pre>
+</div>''', unsafe_allow_html=True)
+        else:
+            show_empty_state()
+
+    elif view in ["Coverage Report", "Function Details", "Source Code", "JSON Output"]:
+        if file_list:
+            # Display aggregate metrics report
+            if len(file_list) > 1 and show_all_files and view == "Coverage Report":
+                st.markdown("<div class='ui-section-title'>📊 Aggregate Coverage Dashboard</div>", unsafe_allow_html=True)
+                agg_metrics = calculate_aggregate_metrics(file_list)
+                
+                col1, col2, col3, col4, col5 = st.columns(5)
+                col1.metric("📁 Files", agg_metrics["file_count"])
+                col2.metric("Avg MI", f"{round(agg_metrics['avg_mi'], 2)}")
+                col3.metric("Total Functions", agg_metrics["total_functions"])
+                col4.metric("Avg Coverage (%)", f"{round(agg_metrics['avg_coverage'], 1)}%")
+                col5.metric("Documented", agg_metrics["total_documented"])
+                
+                # Show Visual Charts
+                st.markdown("<div style='margin-bottom: 30px;'></div>", unsafe_allow_html=True)
+                chart_col1, chart_col2 = st.columns([1, 1])
+                
+                with chart_col1:
+                    st.markdown("<h4 style='text-align: center; color: #94a3b8;'>Total Coverage Breakdown</h4>", unsafe_allow_html=True)
+                    pie_data = pd.DataFrame({
+                        "Status": ["Documented", "Undocumented"],
+                        "Count": [agg_metrics["total_documented"], agg_metrics["total_undocumented"]]
+                    })
+                    fig_pie = px.pie(pie_data, names="Status", values="Count", hole=0.4,
+                                     color="Status", color_discrete_map={"Documented": "#10b981", "Undocumented": "#ef4444"})
+                    fig_pie.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#f8fafc"))
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                    
+                with chart_col2:
+                    st.markdown("<h4 style='text-align: center; color: #94a3b8;'>File-wise Coverage (%)</h4>", unsafe_allow_html=True)
+                    file_names = [os.path.basename(d["file"]) for d in agg_metrics["file_details"]]
+                    coverages = [d["coverage"] for d in agg_metrics["file_details"]]
+                    bar_data = pd.DataFrame({"File": file_names, "Coverage (%)": coverages})
+                    fig_bar = px.bar(bar_data, x="File", y="Coverage (%)", color="Coverage (%)", 
+                                     color_continuous_scale="Viridis", text_auto=".1f")
+                    fig_bar.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#f8fafc"))
+                    st.plotly_chart(fig_bar, use_container_width=True)
+
+                st.markdown("<div class='ui-section-title'>File-wise Metrics Breakdown</div>", unsafe_allow_html=True)
+                file_breakdown = []
+                for detail in agg_metrics["file_details"]:
+                    file_breakdown.append({
+                        "File": detail["file"],
+                        "Functions": detail["functions"],
+                        "Documented": detail["documented"],
+                        "Coverage (%)": f"{round(detail['coverage'], 1)}%",
+                        "Maintainability Index": f"{round(detail['mi'], 2)}"
+                    })
+                st.dataframe(file_breakdown, use_container_width=True)
+                st.divider()
+            
+            # Display individual file analysis
+            if len(file_list) > 1 and show_all_files:
+                st.markdown("<div class='ui-section-title'>📄 Individual File Analysis</div>", unsafe_allow_html=True)
+            
+            for file_to_scan in files_to_display:
+                if os.path.exists(file_to_scan):
+                    file_name = os.path.basename(file_to_scan)
+                    st.caption(f"📄 Analyzing: {file_name}")
+                    try:
+                        mi = get_maintainability_index(file_to_scan)
+                        metrics_data = get_function_complexity(file_to_scan)
+                    except SyntaxError:
+                        st.error(f"❌ Syntax Error in {file_name}! Cannot calculate metrics.")
+                        continue
+                    
+                    if view == "Coverage Report":
+                        st.markdown("<p style='font-size: 14px; color: gray; margin-bottom: 0;'>Maintainability Index</p>", unsafe_allow_html=True)
+                        st.markdown(f"<h1 style='margin-top: 0;'>{round(mi, 2)}</h1>", unsafe_allow_html=True)
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        col1.metric("Total Functions", metrics_data["total_functions"])
+                        col2.metric("Documented", metrics_data["documented"])
+                        col3.metric("Undocumented", metrics_data["undocumented"])
+                        col4.metric("Coverage (%)", f"{metrics_data['coverage_percent']}%")
+
+                        if metrics_data["total_functions"] > 0:
+                            pie_data = pd.DataFrame({
+                                "Type": ["Documented", "Undocumented"],
+                                "Count": [metrics_data["documented"], metrics_data["undocumented"]]
+                            })
+                            fig_file_pie = px.pie(pie_data, names="Type", values="Count", hole=0.5,
+                                                  color="Type", color_discrete_map={"Documented": "#3b82f6", "Undocumented": "#f59e0b"})
+                            fig_file_pie.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#f8fafc"))
+                            
+                            col_p1, col_p2 = st.columns(2)
+                            with col_p1:
+                                st.markdown("<h4 style='text-align: center; color: #94a3b8;'>Docstring Presence</h4>", unsafe_allow_html=True)
+                                st.plotly_chart(fig_file_pie, use_container_width=True, key=f"pie_chart_{file_name}")
+                            
+                            with col_p2:
+                                st.markdown("<h4 style='text-align: center; color: #94a3b8;'>Docstring Style Validation</h4>", unsafe_allow_html=True)
+                                
+                                valid_functions = 0
+                                invalid_functions = 0
+                                
+                                pydoc_report = generate_coverage_report([file_to_scan], include_pydocstyle=True).get("pydocstyle", {})
+                                file_v_details = pydoc_report.get("details", {}).get(file_to_scan, {}).get("violations_detailed", [])
+                                viol_lines = {v.get("line") for v in file_v_details if v.get("line")}
+                                viol_symbols = set()
+                                for v in file_v_details:
+                                    msg = v.get("message", "")
+                                    smatch = re.search(r"`([^`]+)`", msg)
+                                    if smatch:
+                                        viol_symbols.add(smatch.group(1))
+                                
+                                for fn in metrics_data["functions"]:
+                                    if not fn["has_docstring"] or fn["start_line"] in viol_lines or fn["name"] in viol_symbols:
+                                        invalid_functions += 1
+                                    else:
+                                        valid_functions += 1
+                                        
+                                val_pie_data = pd.DataFrame({
+                                    "Status": ["Valid Standards", "Violations Found"],
+                                    "Count": [valid_functions, invalid_functions]
+                                })
+                                fig_val_pie = px.pie(val_pie_data, names="Status", values="Count", hole=0.5,
+                                                      color="Status", color_discrete_map={"Valid Standards": "#10b981", "Violations Found": "#ef4444"})
+                                fig_val_pie.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#f8fafc"))
+                                st.plotly_chart(fig_val_pie, use_container_width=True, key=f"pie_chart_validation_{file_name}")
+                    
+                    elif view == "Function Details":
+                        st.subheader("Function Details")
+                        st.dataframe(metrics_data["functions"], use_container_width=True)
+                    
+                    elif view == "Source Code":
+                        st.subheader("Source Code")
+                        try:
+                            # Safely read file handling multiple potential encodings
+                            file_content = doc_steward._read_file_with_encoding(file_to_scan)
+                            st.code(file_content, language="python")
+                        except Exception as e:
+                            st.error(f"❌ Error displaying source code: {e}")
+
+                    elif view == "JSON Output":
+                        st.subheader("JSON Output")
+                        st.json(metrics_data)
+                        
+                        # Save to JSON
+                        output_dir = os.path.dirname(output_json)
+                        if output_dir:
+                            os.makedirs(output_dir, exist_ok=True)
+                        with open(output_json, "w") as f:
+                            json.dump(metrics_data, f, indent=4)
+                    
+                    st.divider()
+        else:
+            show_empty_state()
+
+if __name__ == "__main__":
+    main()

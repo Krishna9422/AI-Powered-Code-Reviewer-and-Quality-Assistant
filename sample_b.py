@@ -1,28 +1,32 @@
-"""Sample_b.py module."""
+"""Sample b.py."""
 
-# sample_b.py
+from datetime import datetime
+
 
 def generator_example(n):
-    """Generator example.
+    """Generate example.
 
     Args:
         n: Description of n.
 
-    Returns:
-        Description of the return value.
+    Yields:
+        Description of yielded values.
     """
     for i in range(n):
         yield i
 
 
 def raises_example(x):
-    """Raises example.
+    """Raise example.
 
     Args:
-        x: Input value.
+        x: Description of x.
 
     Returns:
-        Double of x.
+        Description of the return value.
+
+    Raises:
+        Exception: Description of when this exception is raised.
     """
     if x < 0:
         raise ValueError("negative")
@@ -34,7 +38,7 @@ def multiply(a, b):
 
     Args:
         a: Description of a.
-        b: Description of b.
+        b: Description of b
 
     Returns:
         Description of the return value.
@@ -51,20 +55,20 @@ def check_prime(n):
     Returns:
         Description of the return value.
     """
-    if n <= 1:
+    if n < 2:
         return False
-    for i in range(2, int(n**0.5) + 1):
-        if n % i == 0:
+    for value in range(2, int(n**0.5) + 1):
+        if n % value == 0:
             return False
     return True
 
 
-def get_current_date():
-    """Get current date.
-
+def current_datetime():
+    """
+    Return the current local date and time.
 
     Returns:
-        Description of the return value.
+        datetime.datetime: The current local date and time as a ``datetime`` object.
     """
-    import datetime
-    return datetime.datetime.now()
+    return datetime.now()
+  

@@ -96,7 +96,7 @@ with open("sample_b.py", "w", encoding="utf-8") as f:
 print("sample_a.py and sample_b.py restored to original undocumented baselines.")
 
 # Quick verification
-import doc_steward
+from core import doc_steward
 
 for fname in ["sample_a.py", "sample_b.py"]:
     entities = doc_steward.get_entity_list(fname)

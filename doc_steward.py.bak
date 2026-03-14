@@ -1,0 +1,949 @@
+import ast
+import os
+import json
+import re
+import subprocess
+from typing import Dict, List, Any, Optional
+
+class DocstringExtractor(ast.NodeVisitor):
+    """DocstringExtractor.
+
+    Attributes:
+        _current_class: Description of _current_class.
+        entities: Description of entities.
+        file_path: Description of file_path.
+    """
+    def __init__(self, file_path: str):
+        self.file_path = file_path
+        self.entities = {
+            "module": {"docstring": None, "line": 1, "name": "Module"},
+            "classes": [],
+            "functions": []
+        }
+        self._current_class = None
+
+    def visit_Module(self, node: ast.Module):
+        self.entities["module"]["docstring"] = ast.get_docstring(node)
+        self.generic_visit(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef):
+        class_info = {
+            "name": node.name,
+            "docstring": ast.get_docstring(node),
+            "line": node.lineno,
+            "end_line": getattr(node, 'end_lineno', node.lineno),
+            "attributes": self._extract_class_attributes(node),
+            "methods": []
+        }
+        self.entities["classes"].append(class_info)
+        
+        old_class = self._current_class
+        self._current_class = class_info
+        self.generic_visit(node)
+        self._current_class = old_class
+
+    def visit_FunctionDef(self, node: ast.FunctionDef):
+        self._visit_callable(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
+        self._visit_callable(node)
+
+    def _visit_callable(self, node: Any):
+        # Extract arguments and handle self/cls
+        args = [arg.arg for arg in node.args.args if arg.arg not in ('self', 'cls')]
+        has_yield = any(isinstance(n, (ast.Yield, ast.YieldFrom)) for n in ast.walk(node))
+        has_return = any(
+            isinstance(n, ast.Return) and n.value is not None
+            for n in ast.walk(node)
+        )
+        has_raises = any(isinstance(n, ast.Raise) for n in ast.walk(node))
+        
+        func_info = {
+            "name": node.name,
+            "docstring": ast.get_docstring(node),
+            "line": node.lineno,
+            "end_line": getattr(node, 'end_lineno', node.lineno),
+            "args": args,
+            "has_return": has_return,
+            "has_yield": has_yield,
+            "has_raises": has_raises
+        }
+        
+        if self._current_class:
+            self._current_class["methods"].append(func_info)
+        else:
+            self.entities["functions"].append(func_info)
+
+    def _extract_class_attributes(self, node: ast.ClassDef) -> List[str]:
+        attrs = set()
+        for child in node.body:
+            if isinstance(child, ast.FunctionDef) and child.name == "__init__":
+                for sub in ast.walk(child):
+                    if isinstance(sub, ast.Assign):
+                        for target in sub.targets:
+                            if (
+                                isinstance(target, ast.Attribute)
+                                and isinstance(target.value, ast.Name)
+                                and target.value.id == "self"
+                            ):
+                                attrs.add(target.attr)
+        return sorted(attrs)
+
+def _read_file_with_encoding(file_path: str) -> str:
+    """Read file content with automatic encoding detection."""
+    encodings = ['utf-8', 'utf-16', 'utf-8-sig', 'latin-1', 'cp1252']
+    
+    for encoding in encodings:
+        try:
+            with open(file_path, "r", encoding=encoding) as f:
+                return f.read()
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    
+    # Last resort: read with errors='replace'
+    with open(file_path, "r", encoding='utf-8', errors='replace') as f:
+        return f.read()
+
+def get_entity_list(file_path: str) -> List[Dict[str, Any]]:
+    """Returns a flat list of entities for display."""
+    entities = analyze_file(file_path)
+    entity_list = []
+    
+    # Functions
+    for f in entities["functions"]:
+        entity_list.append({
+            "Function Name": f["name"],
+            "Type": "Function",
+            "Start Line": f["line"],
+            "End Line": f["end_line"],
+            "Has Docstring": bool(f["docstring"])
+        })
+    
+    # Classes and Methods
+    for cls in entities["classes"]:
+        entity_list.append({
+            "Function Name": cls["name"],
+            "Type": "Class",
+            "Start Line": cls["line"],
+            "End Line": cls["end_line"],
+            "Has Docstring": bool(cls["docstring"])
+        })
+        for m in cls["methods"]:
+            entity_list.append({
+                "Function Name": m["name"],
+                "Type": "Method",
+                "Start Line": m["line"],
+                "End Line": m["end_line"],
+                "Has Docstring": bool(m["docstring"])
+            })
+            
+    return entity_list
+
+def _format_summary(name: str) -> str:
+    """Format name into an imperative summary."""
+    summary = name.replace("_", " ")
+    words = summary.split()
+    if not words:
+        return "Docstring."
+    
+    first_word = words[0].lower()
+    mapping = {
+        "generator": "generate",
+        "raises": "raise",
+        "calculates": "calculate",
+        "adds": "add",
+        "gets": "get",
+        "sets": "set",
+        "checks": "check",
+        "processes": "process",
+        "returns": "return",
+        "creates": "create",
+        "updates": "update",
+        "deletes": "delete",
+    }
+    if first_word in mapping:
+        words[0] = mapping[first_word]
+    elif first_word.endswith("s") and not first_word.endswith("ss") and not first_word.endswith("us") and not first_word.endswith("is") and len(first_word) > 3:
+        if first_word.endswith("ies"):
+            words[0] = first_word[:-3] + "y"
+        elif first_word.endswith("oes"):
+            words[0] = first_word[:-2]
+        else:
+            words[0] = first_word[:-1]
+    
+    summary = " ".join(words)
+    return summary[0].upper() + summary[1:] + "."
+
+def generate_google_docstring(
+    name: str,
+    args: List[str] = None,
+    is_class: bool = False,
+    indent: int = 4,
+    has_return: bool = True,
+    has_yield: bool = False,
+    has_raises: bool = False,
+    attributes: Optional[List[str]] = None
+) -> str:
+    """Generates a Google-style docstring."""
+    prefix = " " * indent
+    summary = _format_summary(name)
+    
+    needs_multi = bool((is_class and attributes) or args or (has_yield and not is_class) or (has_return and not is_class) or has_raises)
+    
+    if not needs_multi:
+        return f'{prefix}"""{summary}"""'
+
+    sections = []
+    
+    if is_class and attributes:
+        sec = f"{prefix}Attributes:\n"
+        sec += "\n".join(f"{prefix}    {attr}: Description of {attr}." for attr in attributes)
+        sections.append(sec)
+
+    if args:
+        sec = f"{prefix}Args:\n"
+        sec += "\n".join(f"{prefix}    {arg}: Description of {arg}." for arg in args)
+        sections.append(sec)
+
+    if has_yield and not is_class:
+        sections.append(f"{prefix}Yields:\n{prefix}    Description of yielded values.")
+    elif has_return and not is_class:
+        sections.append(f"{prefix}Returns:\n{prefix}    Description of the return value.")
+
+    if has_raises:
+        sections.append(f"{prefix}Raises:\n{prefix}    Exception: Description of when this exception is raised.")
+    
+    doc = f'{prefix}"""{summary}\n\n'
+    doc += "\n\n".join(sections)
+    doc += f'\n{prefix}"""'
+    return doc
+
+
+def generate_numpy_docstring(
+    name: str,
+    args: List[str] = None,
+    is_class: bool = False,
+    indent: int = 4,
+    has_return: bool = True,
+    has_yield: bool = False,
+    has_raises: bool = False,
+    attributes: Optional[List[str]] = None
+) -> str:
+    """Generates a NumPy-style docstring."""
+    prefix = " " * indent
+    summary = _format_summary(name)
+    
+    needs_multi = bool((is_class and attributes) or args or (has_yield and not is_class) or (has_return and not is_class) or has_raises)
+    if not needs_multi:
+        return f'{prefix}"""{summary}"""'
+
+    sections = []
+    
+    if args:
+        sec = f"{prefix}Parameters\n{prefix}----------\n"
+        sec += "\n".join(f"{prefix}{arg} : Any\n{prefix}    Description of {arg}." for arg in args)
+        sections.append(sec)
+
+    if is_class and attributes:
+        sec = f"{prefix}Attributes\n{prefix}----------\n"
+        sec += "\n".join(f"{prefix}{attr} : Any\n{prefix}    Description of {attr}." for attr in attributes)
+        sections.append(sec)
+
+    if has_yield and not is_class:
+        sections.append(f"{prefix}Yields\n{prefix}------\n{prefix}Any\n{prefix}    Description of yielded values.")
+    elif has_return and not is_class:
+        sections.append(f"{prefix}Returns\n{prefix}-------\n{prefix}Any\n{prefix}    Description of the return value.")
+
+    if has_raises:
+        sections.append(f"{prefix}Raises\n{prefix}------\n{prefix}Exception\n{prefix}    Description of when this exception is raised.")
+
+    doc = f'{prefix}"""{summary}\n\n'
+    doc += "\n\n".join(sections)
+    doc += f'\n{prefix}"""'
+    return doc
+
+
+def generate_rest_docstring(
+    name: str,
+    args: List[str] = None,
+    is_class: bool = False,
+    indent: int = 4,
+    has_return: bool = True,
+    has_yield: bool = False,
+    has_raises: bool = False,
+    attributes: Optional[List[str]] = None
+) -> str:
+    """Generates a reST-style docstring."""
+    prefix = " " * indent
+    summary = _format_summary(name)
+    
+    needs_multi = bool((is_class and attributes) or args or (has_yield and not is_class) or (has_return and not is_class) or has_raises)
+    if not needs_multi:
+        return f'{prefix}"""{summary}"""'
+
+    sections = []
+
+    if args:
+        sec = "\n".join(f"{prefix}:param {arg}: Description of {arg}.\n{prefix}:type {arg}: Any" for arg in args)
+        sections.append(sec)
+
+    if is_class and attributes:
+        sec = "\n".join(f"{prefix}:ivar {attr}: Description of {attr}." for attr in attributes)
+        sections.append(sec)
+
+    if has_yield and not is_class:
+        sections.append(f"{prefix}:yields: Description of yielded values.\n{prefix}:rtype: Any")
+    elif has_return and not is_class:
+        sections.append(f"{prefix}:returns: Description of the return value.\n{prefix}:rtype: Any")
+
+    if has_raises:
+        sections.append(f"{prefix}:raises Exception: Description of when this exception is raised.")
+
+    doc = f'{prefix}"""{summary}\n\n'
+    doc += "\n\n".join(sections)
+    doc += f'\n{prefix}"""'
+    return doc
+
+
+def generate_docstring(
+    name: str,
+    args: List[str] = None,
+    is_class: bool = False,
+    indent: int = 4,
+    style: str = "google",
+    has_return: bool = True,
+    has_yield: bool = False,
+    has_raises: bool = False,
+    attributes: Optional[List[str]] = None
+) -> str:
+    """Generates a style-specific docstring."""
+    style_key = (style or "google").strip().lower()
+    builders = {
+        "google": generate_google_docstring,
+        "numpy": generate_numpy_docstring,
+        "rest": generate_rest_docstring,
+    }
+    builder = builders.get(style_key, generate_google_docstring)
+    return builder(
+        name=name,
+        args=args,
+        is_class=is_class,
+        indent=indent,
+        has_return=has_return,
+        has_yield=has_yield,
+        has_raises=has_raises,
+        attributes=attributes,
+    )
+
+def analyze_file(file_path: str) -> Dict[str, Any]:
+    """Analyzes a single file using AST."""
+    # Try multiple encodings to handle different file formats
+    encodings = ['utf-8', 'utf-16', 'utf-8-sig', 'latin-1', 'cp1252']
+    source = None
+    
+    for encoding in encodings:
+        try:
+            with open(file_path, "r", encoding=encoding) as f:
+                source = f.read()
+            break
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    
+    if source is None:
+        # Last resort: read with errors='replace' to ignore bad characters
+        with open(file_path, "r", encoding='utf-8', errors='replace') as f:
+            source = f.read()
+    
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        escaped_newline_markers = ("\\n" in source) or ("\\r\\n" in source)
+        has_minimal_real_newlines = source.count("\n") <= 1
+
+        if escaped_newline_markers and has_minimal_real_newlines:
+            normalized_source = (
+                source.replace("\\r\\n", "\n")
+                .replace("\\n", "\n")
+                .replace("\\t", "\t")
+            )
+            tree = ast.parse(normalized_source)
+        else:
+            raise SyntaxError(f"{file_path}: {exc}") from exc
+
+    extractor = DocstringExtractor(file_path)
+    extractor.visit(tree)
+    return extractor.entities
+
+def run_pydocstyle_checks(files: List[str]) -> Dict[str, Any]:
+    """Runs pydocstyle checks for provided files."""
+    result = {
+        "available": True,
+        "total_violations": 0,
+        "files_with_violations": 0,
+        "details": {}
+    }
+
+    for file_path in files:
+        if not os.path.exists(file_path):
+            continue
+
+        try:
+            completed = subprocess.run(
+                ["pydocstyle", file_path],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+        except FileNotFoundError:
+            return {
+                "available": False,
+                "total_violations": 0,
+                "files_with_violations": 0,
+                "details": {},
+                "message": "pydocstyle is not installed or not available in PATH"
+            }
+
+        output = (completed.stdout or "") + (completed.stderr or "")
+        violations = []
+        detailed_violations = []
+        current_file = file_path
+        current_line = None
+
+        for raw_line in output.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            location_match = re.match(r"^(.*?\.py):(\d+)(?:\b|:|\s)", line)
+            if location_match:
+                current_file = location_match.group(1)
+                current_line = int(location_match.group(2))
+
+            code_match = re.search(r"\b(D\d{3})\b\s*:?\s*(.*)", line)
+            if code_match:
+                rule_code = code_match.group(1)
+                message = code_match.group(2).strip()
+
+                if current_line is not None:
+                    summary = f"{current_file}:{current_line}: {rule_code}: {message}"
+                else:
+                    summary = f"{current_file}: {rule_code}: {message}"
+
+                violations.append(summary)
+                detailed_violations.append({
+                    "file_path": current_file,
+                    "line": current_line,
+                    "code": rule_code,
+                    "message": message,
+                })
+
+        result["details"][file_path] = {
+            "violations_count": len(violations),
+            "violations": violations,
+            "violations_detailed": detailed_violations,
+        }
+        result["total_violations"] += len(violations)
+        if violations:
+            result["files_with_violations"] += 1
+
+    return result
+
+
+def generate_coverage_report(files: List[str], include_pydocstyle: bool = True) -> Dict[str, Any]:
+    """Produces the docstring coverage report."""
+    report = {
+        "files_analyzed": len(files),
+        "total_entities": 0,
+        "documented_entities": 0,
+        "details": {}
+    }
+
+    valid_files_count = 0
+
+    for file_path in files:
+        if not os.path.exists(file_path):
+            continue
+
+        try:
+            entities = analyze_file(file_path)
+        except SyntaxError as exc:
+            report["details"][file_path] = {
+                "coverage": 0.0,
+                "stats": {"total": 0, "documented": 0},
+                "parse_error": str(exc),
+            }
+            continue
+
+        valid_files_count += 1
+        file_stats = {"total": 0, "documented": 0}
+        
+        def check(item):
+            file_stats["total"] += 1
+            if item.get("docstring"):
+                file_stats["documented"] += 1
+        
+        check(entities["module"])
+        for cls in entities["classes"]:
+            check(cls)
+            for m in cls["methods"]:
+                check(m)
+        for f in entities["functions"]:
+            check(f)
+                
+        report["total_entities"] += file_stats["total"]
+        report["documented_entities"] += file_stats["documented"]
+        
+        coverage = (file_stats["documented"] / file_stats["total"] * 100) if file_stats["total"] > 0 else 0.0
+        report["details"][file_path] = {
+            "coverage": round(coverage, 2),
+            "stats": file_stats
+        }
+
+    report["files_analyzed"] = valid_files_count
+    report["overall_coverage"] = round((report["documented_entities"] / report["total_entities"] * 100), 2) if report["total_entities"] > 0 else 0.0
+
+    if include_pydocstyle:
+        report["pydocstyle"] = run_pydocstyle_checks(files)
+
+    return report
+
+def apply_missing_docstrings(file_path: str, style: str = "google"):
+    """Adds missing style-aware docstrings to a file."""
+    # Try multiple encodings to read file
+    encodings = ['utf-8', 'utf-16', 'utf-8-sig', 'latin-1', 'cp1252']
+    lines = None
+    
+    for encoding in encodings:
+        try:
+            with open(file_path, "r", encoding=encoding) as f:
+                lines = f.readlines()
+            break
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    
+    if lines is None:
+        # Last resort: read with errors='replace'
+        with open(file_path, "r", encoding='utf-8', errors='replace') as f:
+            lines = f.readlines()
+    
+    entities = analyze_file(file_path)
+
+    to_add = []
+    
+    # Check functions
+    for f in entities["functions"]:
+        if not f["docstring"]:
+            # Find indentation of the def line
+            def_line = lines[f["line"]-1]
+            indent = len(def_line) - len(def_line.lstrip())
+            to_add.append((
+                f["line"],
+                generate_docstring(
+                    name=f["name"],
+                    args=f["args"],
+                    indent=indent+4,
+                    style=style,
+                    has_return=f.get("has_return", True),
+                    has_yield=f.get("has_yield", False),
+                    has_raises=f.get("has_raises", False)
+                )
+            ))
+            
+    # Check classes
+    for cls in entities["classes"]:
+        if not cls["docstring"]:
+            def_line = lines[cls["line"]-1]
+            indent = len(def_line) - len(def_line.lstrip())
+            to_add.append((
+                cls["line"],
+                generate_docstring(
+                    name=cls["name"],
+                    is_class=True,
+                    indent=indent+4,
+                    style=style,
+                    has_return=False,
+                    has_yield=False,
+                    has_raises=False,
+                    attributes=cls.get("attributes", [])
+                )
+            ))
+        for m in cls["methods"]:
+            if not m["docstring"]:
+                def_line = lines[m["line"]-1]
+                indent = len(def_line) - len(def_line.lstrip())
+                to_add.append((
+                    m["line"],
+                    generate_docstring(
+                        name=m["name"],
+                        args=m["args"],
+                        indent=indent+4,
+                        style=style,
+                        has_return=m.get("has_return", True),
+                        has_yield=m.get("has_yield", False),
+                        has_raises=m.get("has_raises", False)
+                    )
+                ))
+                
+    # Check Module
+    if not entities["module"]["docstring"]:
+        to_add.append((0, f'"""{os.path.basename(file_path).capitalize()} module."""\n'))
+
+    # Sort descending by line number to keep indices correct while inserting
+    to_add.sort(key=lambda x: x[0], reverse=True)
+    
+    for line_idx, doc_str in to_add:
+        if line_idx == 0:
+            lines.insert(0, doc_str + "\n")
+        else:
+            # Need to find the end of the def/class line (it might wrap)
+            # For simplicity, we assume one line or we find the first line ending with colon
+            curr_idx = line_idx - 1
+            while curr_idx < len(lines) and ":" not in lines[curr_idx]:
+                curr_idx += 1
+            
+            lines.insert(curr_idx + 1, doc_str + "\n")
+            
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def _extract_method_attributes(class_node: ast.ClassDef) -> List[str]:
+    """Extract class attributes assigned to self in __init__."""
+    attrs = set()
+    for child in class_node.body:
+        if isinstance(child, ast.FunctionDef) and child.name == "__init__":
+            for sub in ast.walk(child):
+                if isinstance(sub, ast.Assign):
+                    for target in sub.targets:
+                        if (
+                            isinstance(target, ast.Attribute)
+                            and isinstance(target.value, ast.Name)
+                            and target.value.id == "self"
+                        ):
+                            attrs.add(target.attr)
+    return sorted(attrs)
+
+
+def _replace_or_insert_docstring(
+    lines: List[str],
+    node: Any,
+    docstring_text: str,
+    indent_spaces: int,
+) -> List[str]:
+    """Replace existing docstring for a node or insert a new one after signature."""
+    doc_lines = [line + "\n" for line in docstring_text.splitlines()]
+
+    first_stmt = node.body[0] if getattr(node, "body", None) else None
+    has_existing = (
+        first_stmt is not None
+        and isinstance(first_stmt, ast.Expr)
+        and isinstance(getattr(first_stmt, "value", None), ast.Constant)
+        and isinstance(first_stmt.value.value, str)
+    )
+
+    if has_existing:
+        start_idx = first_stmt.lineno - 1
+        end_idx = getattr(first_stmt, "end_lineno", first_stmt.lineno) - 1
+        
+        is_func = isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        is_class = isinstance(node, ast.ClassDef)
+        if is_func:
+            # Fix D202: no blank lines after function docstring
+            while end_idx + 1 < len(lines) and lines[end_idx + 1].strip() == "":
+                lines.pop(end_idx + 1)
+            # Fix D201: no blank lines before function docstring
+            signature_idx = node.lineno - 1
+            while signature_idx < len(lines) and ":" not in lines[signature_idx]:
+                signature_idx += 1
+            while start_idx - 1 > signature_idx and lines[start_idx - 1].strip() == "":
+                lines.pop(start_idx - 1)
+                start_idx -= 1
+                end_idx -= 1
+        elif is_class:
+            # Fix D204: 1 blank line required after class docstring
+            if end_idx + 1 < len(lines) and lines[end_idx + 1].strip() != "":
+                lines.insert(end_idx + 1, "\n")
+
+        lines[start_idx:end_idx + 1] = doc_lines
+        return lines
+
+    signature_idx = node.lineno - 1
+    while signature_idx < len(lines) and ":" not in lines[signature_idx]:
+        signature_idx += 1
+
+    insert_idx = min(signature_idx + 1, len(lines))
+    lines[insert_idx:insert_idx] = doc_lines
+    
+    if isinstance(node, ast.ClassDef):
+        idx_after_doc = insert_idx + len(doc_lines)
+        if idx_after_doc < len(lines) and lines[idx_after_doc].strip() != "":
+            lines.insert(idx_after_doc, "\n")
+            
+    return lines
+
+
+def apply_docstring_fix_at_line(file_path: str, target_line: int, style: str = "google") -> bool:
+    """Auto-fix docstring for entity located at a specific line.
+
+    Returns True if a fix was applied, False otherwise.
+    """
+    if not os.path.exists(file_path):
+        return False
+
+    # Try multiple encodings to read file
+    encodings = ['utf-8', 'utf-16', 'utf-8-sig', 'latin-1', 'cp1252']
+    lines = None
+    
+    for encoding in encodings:
+        try:
+            with open(file_path, "r", encoding=encoding) as f:
+                lines = f.readlines()
+            break
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    
+    if lines is None:
+        # Last resort: read with errors='replace'
+        with open(file_path, "r", encoding='utf-8', errors='replace') as f:
+            lines = f.readlines()
+    
+    source = "".join(lines)
+    tree = ast.parse(source)
+
+    target_node = None
+    target_kind = None
+    min_size = float('inf')
+
+    if target_line == 1:
+        target_node = tree
+        target_kind = "module"
+    else:
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                start = node.lineno
+                end = getattr(node, 'end_lineno', node.lineno)
+                if start <= target_line <= end:
+                    size = end - start
+                    if size < min_size:
+                        min_size = size
+                        target_node = node
+                        target_kind = "class" if isinstance(node, ast.ClassDef) else "function"
+
+    if target_node is None:
+        return False
+
+    if target_kind == "module":
+        module_doc = generate_docstring(
+            name=os.path.basename(file_path),
+            args=[],
+            is_class=False,
+            indent=0,
+            style=style,
+            has_return=False,
+            has_yield=False,
+            has_raises=False,
+        )
+
+        if (
+            tree.body
+            and isinstance(tree.body[0], ast.Expr)
+            and isinstance(getattr(tree.body[0], "value", None), ast.Constant)
+            and isinstance(tree.body[0].value.value, str)
+        ):
+            first_stmt = tree.body[0]
+            start_idx = first_stmt.lineno - 1
+            end_idx = getattr(first_stmt, "end_lineno", first_stmt.lineno) - 1
+            lines[start_idx:end_idx + 1] = [line + "\n" for line in module_doc.splitlines()]
+        else:
+            lines.insert(0, module_doc + "\n")
+
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+        return True
+
+    if target_kind == "class":
+        doc_text = generate_docstring(
+            name=target_node.name,
+            args=[],
+            is_class=True,
+            indent=target_node.col_offset + 4,
+            style=style,
+            has_return=False,
+            has_yield=False,
+            has_raises=False,
+            attributes=_extract_method_attributes(target_node),
+        )
+        lines = _replace_or_insert_docstring(lines, target_node, doc_text, target_node.col_offset + 4)
+    else:
+        args = [arg.arg for arg in target_node.args.args if arg.arg not in ("self", "cls")]
+        has_yield = any(isinstance(n, (ast.Yield, ast.YieldFrom)) for n in ast.walk(target_node))
+        has_return = any(isinstance(n, ast.Return) and n.value is not None for n in ast.walk(target_node))
+        has_raises = any(isinstance(n, ast.Raise) for n in ast.walk(target_node))
+
+        doc_text = generate_docstring(
+            name=target_node.name,
+            args=args,
+            is_class=False,
+            indent=target_node.col_offset + 4,
+            style=style,
+            has_return=has_return,
+            has_yield=has_yield,
+            has_raises=has_raises,
+        )
+        lines = _replace_or_insert_docstring(lines, target_node, doc_text, target_node.col_offset + 4)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+        f.flush()
+        os.fsync(f.fileno())
+
+    return True
+
+
+def apply_docstring_fixes_from_pydocstyle(file_path: str, style: str = "google") -> int:
+    """Apply auto-fixes for pydocstyle violations in a single file.
+
+    Returns the number of entities updated.
+    """
+    if not os.path.exists(file_path):
+        return 0
+
+    report = run_pydocstyle_checks([file_path])
+    details = report.get("details", {}).get(file_path, {})
+    violation_list = details.get("violations_detailed", [])
+
+    target_lines = set()
+    for viol in violation_list:
+        line_no = viol.get("line")
+        if line_no is not None:
+            target_lines.add(line_no)
+
+    if not target_lines:
+        violations = details.get("violations", [])
+        for violation in violations:
+            line_match = re.search(r":(\d+)\b", violation)
+            if line_match:
+                target_lines.add(int(line_match.group(1)))
+
+    fixed = 0
+    for line_no in sorted(target_lines):
+        if apply_docstring_fix_at_line(file_path, line_no, style=style):
+            fixed += 1
+
+    return fixed
+
+def get_code_metrics(file_path: str) -> Dict[str, Any]:
+    """Get code metrics.
+
+    Args:
+        file_path: Description of file_path.
+
+    Returns:
+        Description of the return value.
+    """
+    from radon.complexity import cc_visit
+    from radon.raw import analyze
+    
+    source = _read_file_with_encoding(file_path)
+    
+    # Complexity
+    cc_blocks = cc_visit(source)
+    # Raw metrics
+    raw = analyze(source)
+    
+    return {
+        "loc": raw.loc,
+        "lloc": raw.lloc,
+        "sloc": raw.sloc,
+        "comments": raw.comments,
+        "multi": raw.multi,
+        "blank": raw.blank,
+        "complexity": [
+            {"type": b.type, "name": b.name, "complexity": b.complexity, "rank": b.rank}
+            for f in [cc_blocks] for b in f
+        ]
+    }
+
+def get_maintainability_index(file_path: str) -> float:
+    from radon.metrics import mi_visit
+    from radon.raw import analyze
+    source = _read_file_with_encoding(file_path)
+    raw = analyze(source)
+    mi = mi_visit(source, raw.multi)
+    return mi
+
+def get_function_complexity(file_path: str) -> Dict[str, Any]:
+    from radon.complexity import cc_visit
+    
+    source = _read_file_with_encoding(file_path)
+        
+    cc_blocks = cc_visit(source)
+    complexity_map = {b.name: b.complexity for b in cc_blocks}
+    
+    entities = analyze_file(file_path)
+    functions_list = []
+    
+    # Process standalone functions
+    for f in entities["functions"]:
+        functions_list.append({
+            "name": f["name"],
+            "type": "Function",
+            "start_line": f["line"],
+            "end_line": f["end_line"],
+            "has_docstring": bool(f["docstring"]),
+            "complexity": complexity_map.get(f["name"], 1)
+        })
+        
+    # Process methods within classes
+    for cls in entities["classes"]:
+        for m in cls["methods"]:
+            functions_list.append({
+                "name": m["name"],
+                "type": "Method",
+                "start_line": m["line"],
+                "end_line": m["end_line"],
+                "has_docstring": bool(m["docstring"]),
+                "complexity": complexity_map.get(m["name"], 1)
+            })
+            
+    functions_list.sort(key=lambda x: x["start_line"])
+    
+    total_funcs = len(functions_list)
+    documented = sum(1 for f in functions_list if f["has_docstring"])
+    undocumented = total_funcs - documented
+    coverage = (documented / total_funcs * 100) if total_funcs > 0 else 0.0
+    
+    return {
+        "total_functions": total_funcs,
+        "documented": documented,
+        "undocumented": undocumented,
+        "coverage_percent": round(coverage, 2),
+        "functions": functions_list
+    }
+
+if __name__ == "__main__":
+    target_files = ["basics.py", "main_app.py", "sample_a.py", "sample_b.py"]
+    existing_files = [f for f in target_files if os.path.exists(f)]
+    
+    if existing_files:
+        print("--- Docstring Coverage Report (Before) ---")
+        coverage_before = generate_coverage_report(existing_files)
+        print(json.dumps(coverage_before, indent=2))
+        
+        # Save initial report
+        os.makedirs("storage", exist_ok=True)
+        with open("storage/review_logs.json", "w") as rf:
+            json.dump(coverage_before, rf, indent=4)
+        print("\nInitial report saved to storage/review_logs.json")
+        
+        # Apply docstrings
+        for f in existing_files:
+            apply_missing_docstrings(f)
+            
+        print("\n--- Docstring Coverage Report (After Application) ---")
+        coverage_after = generate_coverage_report(existing_files)
+        print(json.dumps(coverage_after, indent=2))
+    else:
+        print("No target files found to analyze.")

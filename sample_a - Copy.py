@@ -54,11 +54,10 @@ def is_even(n):
     """
     Check if a number is even.
 
-    Args:
-        n (int): The integer to evaluate.
-
-    Returns:
-        bool: ``True`` if ``n`` is even, otherwise ``False``.
+    :param n: The integer to evaluate
+    :type n: int
+    :returns: ``True`` if ``n`` is even, otherwise ``Fa
+    :rtype: bool
     """
     return n % 2 == 0
 
